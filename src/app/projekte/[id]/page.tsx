@@ -5,16 +5,18 @@ import { AuthGuard } from "@/components/layout/AuthGuard";
 import { useEffect, useState } from "react";
 import { doc, getDoc, updateDoc, Timestamp, collection, query, where, getDocs, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase/firebase";
-import { Project, Task, Budget, PROJECT_STATUS_LABELS, ProjectStatus, STATUS_LABELS, PRIORITY_LABELS, canManageTasks } from "@/lib/types";
+import { Project, Task, Budget, PROJECT_STATUS_LABELS, PROJECT_COLORS, ProjectStatus, STATUS_LABELS, PRIORITY_LABELS, canManageTasks } from "@/lib/types";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { Textarea } from "@/components/ui/Textarea";
 import { Card, CardTitle, CardContent } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, ClipboardList, Wallet, Calendar, Settings } from "lucide-react";
+import { ArrowLeft, Plus, ClipboardList, Wallet, Calendar, Settings, Pencil, Save, X, Clock } from "lucide-react";
 
 export default function ProjektDetailPage() {
   return (
@@ -34,6 +36,13 @@ function ProjektDetailContent() {
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+
+  // Edit Mode
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editColor, setEditColor] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -59,6 +68,35 @@ function ProjektDetailContent() {
     }
     load();
   }, [projectId]);
+
+  const startEditing = () => {
+    if (!project) return;
+    setEditName(project.name);
+    setEditDescription(project.description);
+    setEditColor(project.color);
+    setEditing(true);
+  };
+
+  const saveEditing = async () => {
+    if (!project || !user) return;
+    setSaving(true);
+    try {
+      const now = Timestamp.now();
+      await updateDoc(doc(db, "projects", projectId), {
+        name: editName,
+        description: editDescription,
+        color: editColor,
+        updatedAt: now,
+      });
+      setProject({ ...project, name: editName, description: editDescription, color: editColor, updatedAt: now });
+      setEditing(false);
+      toast.success("Projekt aktualisiert!");
+    } catch (err) {
+      toast.error("Fehler beim Speichern.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleStatusChange = async (newStatus: ProjectStatus) => {
     if (!project) return;
@@ -100,27 +138,89 @@ function ProjektDetailContent() {
       </Link>
 
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
-          <div className="h-5 w-5 rounded-full" style={{ backgroundColor: project.color }} />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{project.name}</h1>
-            {project.description && (
-              <p className="text-sm text-gray-500 mt-1">{project.description}</p>
+          {editing ? (
+            <div className="flex flex-wrap gap-1.5">
+              {PROJECT_COLORS.map((c) => (
+                <button
+                  key={c.value}
+                  onClick={() => setEditColor(c.value)}
+                  className={`h-6 w-6 rounded-full border-2 transition-all ${
+                    editColor === c.value ? "border-gray-900 scale-110" : "border-transparent"
+                  }`}
+                  style={{ backgroundColor: c.value }}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="h-5 w-5 rounded-full shrink-0" style={{ backgroundColor: project.color }} />
+          )}
+          <div className="flex-1 min-w-0">
+            {editing ? (
+              <div className="space-y-2">
+                <Input
+                  id="editName"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="text-xl font-bold"
+                />
+                <Input
+                  id="editDesc"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="Beschreibung..."
+                />
+              </div>
+            ) : (
+              <>
+                <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{project.name}</h1>
+                {project.description && (
+                  <p className="text-sm text-gray-500 mt-1">{project.description}</p>
+                )}
+                {/* Zuletzt bearbeitet */}
+                {project.updatedAt && project.createdAt &&
+                  project.updatedAt.toDate().getTime() - project.createdAt.toDate().getTime() > 60000 && (
+                  <p className="mt-1 flex items-center gap-1 text-xs text-gray-400">
+                    <Clock className="h-3 w-3" />
+                    Zuletzt bearbeitet am {project.updatedAt.toDate().toLocaleDateString("de-DE")} um {project.updatedAt.toDate().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                )}
+              </>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={project.status === "active" ? "success" : project.status === "completed" ? "info" : "default"}>
-            {PROJECT_STATUS_LABELS[project.status]}
-          </Badge>
-          {canManageTasks(role) && (
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              <Settings className="h-4 w-4 text-gray-500" />
-            </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {!editing && (
+            <Badge variant={project.status === "active" ? "success" : project.status === "completed" ? "info" : "default"}>
+              {PROJECT_STATUS_LABELS[project.status]}
+            </Badge>
+          )}
+          {canManageTasks(role) && !editing && (
+            <>
+              <Button variant="secondary" size="sm" onClick={startEditing}>
+                <Pencil className="h-3.5 w-3.5 mr-1" />
+                Bearbeiten
+              </Button>
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                <Settings className="h-4 w-4 text-gray-500" />
+              </button>
+            </>
+          )}
+          {editing && (
+            <>
+              <Button size="sm" onClick={saveEditing} disabled={saving}>
+                <Save className="h-3.5 w-3.5 mr-1" />
+                {saving ? "..." : "Speichern"}
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>
+                <X className="h-3.5 w-3.5 mr-1" />
+                Abbrechen
+              </Button>
+            </>
           )}
         </div>
       </div>
