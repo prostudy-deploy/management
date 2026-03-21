@@ -16,7 +16,7 @@ import { Select } from "@/components/ui/Select";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, ClipboardList, Wallet, Calendar, Settings, Pencil, Save, X, Clock } from "lucide-react";
+import { ArrowLeft, Plus, ClipboardList, Wallet, Calendar, Settings, Pencil, Save, X, Clock, CircleDot } from "lucide-react";
 
 export default function ProjektDetailPage() {
   return (
@@ -333,6 +333,12 @@ function ProjektDetailContent() {
                         <div className="flex items-center gap-2 mt-1">
                           <TaskStatusBadge status={task.status} />
                           <Badge variant="default">{PRIORITY_LABELS[task.priority]}</Badge>
+                          {task.approvals && task.approvals.filter((a: any) => a.status === "pending").length > 0 && (
+                            <span className="flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 px-1.5 py-0.5 text-xs font-medium">
+                              <CircleDot className="h-3 w-3" />
+                              {task.approvals.filter((a: any) => a.status === "pending").length}
+                            </span>
+                          )}
                           {task.deadline && (
                             <span className="flex items-center gap-1 text-xs text-gray-500">
                               <Calendar className="h-3 w-3" />

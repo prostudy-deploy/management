@@ -72,6 +72,44 @@ export interface TaskAttachment {
   storagePath: string;
 }
 
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  checked: boolean;
+  createdBy: string;
+  createdAt: number; // Date.now() timestamp
+}
+
+// --- Freigaben ---
+export type ApprovalStatus = "pending" | "approved" | "rejected";
+export type ApprovalType = "file" | "question" | "general";
+
+export const APPROVAL_TYPE_LABELS: Record<ApprovalType, string> = {
+  file: "Datei-Freigabe",
+  question: "Frage",
+  general: "Allgemeine Freigabe",
+};
+
+export const APPROVAL_STATUS_LABELS: Record<ApprovalStatus, string> = {
+  pending: "Offen",
+  approved: "Freigegeben",
+  rejected: "Abgelehnt",
+};
+
+export interface ApprovalRequest {
+  id: string;
+  type: ApprovalType;
+  title: string;
+  description: string;
+  attachments: TaskAttachment[];
+  status: ApprovalStatus;
+  createdBy: string;
+  createdAt: number; // Date.now()
+  respondedBy?: string;
+  respondedAt?: number;
+  responseNote?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -85,8 +123,11 @@ export interface Task {
   deadline: Timestamp | null;
   links: TaskLink[];
   attachments: TaskAttachment[];
+  checklist: ChecklistItem[];
+  approvals: ApprovalRequest[];
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  lastEditedBy?: string;
 }
 
 // --- Abgaben ---

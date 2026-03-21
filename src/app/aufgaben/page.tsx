@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import Link from "next/link";
 import { Select } from "@/components/ui/Select";
-import { Plus, Calendar, FolderOpen } from "lucide-react";
+import { Plus, Calendar, FolderOpen, CircleDot } from "lucide-react";
 
 export default function AufgabenPage() {
   return (
@@ -177,6 +177,12 @@ function AufgabenContent() {
                           style={{ backgroundColor: projects[task.projectId].color }}
                         />
                         {projects[task.projectId].name}
+                      </span>
+                    )}
+                    {task.approvals && task.approvals.filter((a: any) => a.status === "pending").length > 0 && (
+                      <span className="flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-xs font-medium">
+                        <CircleDot className="h-3 w-3" />
+                        {task.approvals.filter((a: any) => a.status === "pending").length} Freigabe{task.approvals.filter((a: any) => a.status === "pending").length > 1 ? "n" : ""}
                       </span>
                     )}
                     {task.deadline && (
