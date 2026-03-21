@@ -16,11 +16,20 @@ import {
 } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase/firebase";
-import { ChatMessage, ChatMention, ChatGroup, TaskAttachment, AppUser, Task, canManageTasks } from "@/lib/types";
+import { ChatMessage, ChatMention, ChatGroup, TaskAttachment, AppUser, Task, Submission, canManageTasks } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
+
+// Datei-Info für Mention-System
+interface FileInfo {
+  name: string;
+  url: string;
+  taskId: string;
+  taskTitle: string;
+  source: "task" | "submission";
+}
 import {
   Send,
   Paperclip,
@@ -111,6 +120,19 @@ function renderMessageContent(content: string, mentions: ChatMention[]) {
           {mention.label}
         </a>
       );
+    } else if (mention.type === "file") {
+      parts.push(
+        <a
+          key={key++}
+          href={mention.url || "#"}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 text-sm font-medium text-green-700 hover:bg-green-200 transition-colors"
+        >
+          <FileText className="h-3 w-3" />
+          {mention.label}
+        </a>
+      );
     } else {
       parts.push(
         <span
@@ -157,13 +179,14 @@ function ChatContent() {
   // @-Mention State
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
-  const [mentionType, setMentionType] = useState<"all" | "task" | "user">("all");
+  const [mentionType, setMentionType] = useState<"all" | "task" | "user" | "file">("all");
   const [pendingMentions, setPendingMentions] = useState<ChatMention[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
 
   // Daten für @-Mentions
   const [teamMembers, setTeamMembers] = useState<AppUser[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [allFiles, setAllFiles] = useState<FileInfo[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -172,7 +195,7 @@ function ChatContent() {
 
   const isManager = canManageTasks(role);
 
-  // Team + Aufgaben laden
+  // Team + Aufgaben + Dateien laden
   useEffect(() => {
     async function loadData() {
       const usersSnap = await getDocs(collection(db, "users"));
@@ -181,10 +204,49 @@ function ChatContent() {
       const tasksSnap = await getDocs(
         query(collection(db, "tasks"), orderBy("createdAt", "desc"), limit(100))
       );
-      setTasks(tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Task)));
+      const loadedTasks = tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Task));
+      setTasks(loadedTasks);
+
+      // Dateien aus Aufgaben sammeln
+      const files: FileInfo[] = [];
+      loadedTasks.forEach((task) => {
+        if (task.attachments?.length > 0) {
+          task.attachments.forEach((att) => {
+            files.push({
+              name: att.name,
+              url: att.url,
+              taskId: task.id,
+              taskTitle: task.title,
+              source: "task",
+            });
+          });
+        }
+      });
+
+      // Dateien aus Abgaben sammeln
+      if (isManager) {
+        const subsSnap = await getDocs(collection(db, "submissions"));
+        subsSnap.docs.forEach((d) => {
+          const sub = d.data() as Submission;
+          const task = loadedTasks.find((t) => t.id === sub.taskId);
+          if (sub.attachments?.length > 0) {
+            sub.attachments.forEach((att) => {
+              files.push({
+                name: att.name,
+                url: att.url,
+                taskId: sub.taskId,
+                taskTitle: task?.title || "Unbekannte Aufgabe",
+                source: "submission",
+              });
+            });
+          }
+        });
+      }
+
+      setAllFiles(files);
     }
     loadData();
-  }, []);
+  }, [isManager]);
 
   // Gruppen laden (Echtzeit)
   useEffect(() => {
@@ -239,7 +301,7 @@ function ChatContent() {
   const mentionSuggestions = useMemo(() => {
     if (!showMentions) return [];
     const q = mentionQuery.toLowerCase();
-    const results: { type: "task" | "user"; id: string; label: string; sub?: string }[] = [];
+    const results: { type: "task" | "user" | "file"; id: string; label: string; sub?: string; url?: string }[] = [];
 
     if (mentionType === "all" || mentionType === "user") {
       teamMembers
@@ -255,8 +317,22 @@ function ChatContent() {
         .forEach((t) => results.push({ type: "task", id: t.id, label: t.title, sub: t.status }));
     }
 
+    if (mentionType === "file") {
+      // Dateien nur im "Dateien"-Tab anzeigen (mit Suchfeld)
+      allFiles
+        .filter((f) => f.name.toLowerCase().includes(q) || f.taskTitle.toLowerCase().includes(q))
+        .slice(0, 10)
+        .forEach((f) => results.push({
+          type: "file",
+          id: f.url,
+          label: f.name,
+          sub: `${f.source === "task" ? "Aufgabe" : "Abgabe"}: ${f.taskTitle}`,
+          url: f.url,
+        }));
+    }
+
     return results;
-  }, [showMentions, mentionQuery, mentionType, teamMembers, tasks]);
+  }, [showMentions, mentionQuery, mentionType, teamMembers, tasks, allFiles]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -276,17 +352,26 @@ function ChatContent() {
   };
 
   const selectMention = useCallback(
-    (suggestion: { type: "task" | "user"; id: string; label: string }) => {
+    (suggestion: { type: "task" | "user" | "file"; id: string; label: string; url?: string }) => {
       const cursorPos = inputRef.current?.selectionStart || 0;
       const textBeforeCursor = input.slice(0, cursorPos);
       const atIdx = textBeforeCursor.lastIndexOf("@");
       const before = input.slice(0, atIdx);
       const after = input.slice(cursorPos);
 
-      setInput(`${before}@${suggestion.label} ${after}`);
+      const displayLabel = suggestion.type === "file"
+        ? `📎${suggestion.label}`
+        : suggestion.label;
+
+      setInput(`${before}@${displayLabel} ${after}`);
       setPendingMentions([
         ...pendingMentions,
-        { type: suggestion.type, id: suggestion.id, label: suggestion.label },
+        {
+          type: suggestion.type,
+          id: suggestion.id,
+          label: displayLabel,
+          ...(suggestion.type === "file" ? { url: suggestion.url } : {}),
+        },
       ]);
       setShowMentions(false);
 
@@ -701,11 +786,12 @@ function ChatContent() {
         )}
 
         {/* @-Mention Dropdown */}
-        {showMentions && mentionSuggestions.length > 0 && (
+        {showMentions && (mentionSuggestions.length > 0 || mentionType === "file") && (
           <div className="relative shrink-0">
-            <div className="absolute bottom-0 left-0 right-0 z-10 mb-1 rounded-lg border border-gray-200 bg-white shadow-lg max-h-60 overflow-y-auto">
-              <div className="flex border-b border-gray-100 px-2 pt-2 gap-1">
-                {(["all", "user", "task"] as const).map((type) => (
+            <div className="absolute bottom-0 left-0 right-0 z-10 mb-1 rounded-lg border border-gray-200 bg-white shadow-lg max-h-72 overflow-hidden flex flex-col">
+              {/* Tabs */}
+              <div className="flex border-b border-gray-100 px-2 pt-2 gap-1 shrink-0">
+                {(["all", "user", "task", "file"] as const).map((type) => (
                   <button
                     key={type}
                     onClick={() => { setMentionType(type); setMentionIndex(0); }}
@@ -713,15 +799,25 @@ function ChatContent() {
                       mentionType === type ? "bg-blue-100 text-blue-700" : "text-gray-500 hover:bg-gray-100"
                     }`}
                   >
-                    {type === "all" ? "Alle" : type === "user" ? "Personen" : "Aufgaben"}
+                    {type === "all" ? "Alle" : type === "user" ? "Personen" : type === "task" ? "Aufgaben" : "📎 Dateien"}
                   </button>
                 ))}
               </div>
 
-              <div className="py-1">
+              {/* Datei-Tab: Hinweis wenn leer */}
+              {mentionType === "file" && mentionSuggestions.length === 0 && (
+                <div className="px-3 py-4 text-center text-sm text-gray-400">
+                  <Paperclip className="h-6 w-6 mx-auto mb-2 text-gray-300" />
+                  <p>Dateiname oder Aufgabe eingeben</p>
+                  <p className="text-xs mt-1">{allFiles.length} Dateien verfügbar</p>
+                </div>
+              )}
+
+              {/* Ergebnisliste */}
+              <div className="py-1 overflow-y-auto">
                 {mentionSuggestions.map((s, i) => (
                   <button
-                    key={`${s.type}-${s.id}`}
+                    key={`${s.type}-${s.id}-${i}`}
                     onClick={() => selectMention(s)}
                     className={`flex w-full items-center gap-3 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors ${
                       i === mentionIndex ? "bg-blue-50" : ""
@@ -731,17 +827,25 @@ function ChatContent() {
                       <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold text-white ${getAvatarColor(s.id)}`}>
                         {getInitials(s.label)}
                       </div>
+                    ) : s.type === "file" ? (
+                      <div className="h-6 w-6 rounded flex items-center justify-center bg-green-100 shrink-0">
+                        {isImageFile(s.label) ? (
+                          <ImageIcon className="h-3.5 w-3.5 text-green-600" />
+                        ) : (
+                          <FileText className="h-3.5 w-3.5 text-green-600" />
+                        )}
+                      </div>
                     ) : (
-                      <ClipboardList className="h-5 w-5 text-blue-500" />
+                      <ClipboardList className="h-5 w-5 text-blue-500 shrink-0" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-gray-900 truncate">{s.label}</p>
                       {s.sub && (
-                        <p className="text-xs text-gray-400 capitalize">{s.sub}</p>
+                        <p className="text-xs text-gray-400 truncate">{s.sub}</p>
                       )}
                     </div>
-                    <span className="text-xs text-gray-400">
-                      {s.type === "user" ? "Person" : "Aufgabe"}
+                    <span className="text-xs text-gray-400 shrink-0">
+                      {s.type === "user" ? "Person" : s.type === "task" ? "Aufgabe" : "Datei"}
                     </span>
                   </button>
                 ))}

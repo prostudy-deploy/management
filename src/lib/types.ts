@@ -231,9 +231,11 @@ export interface ChatGroup {
 }
 
 export interface ChatMention {
-  type: "task" | "user";
+  type: "task" | "user" | "file";
   id: string;
   label: string; // Anzeigename
+  url?: string; // Für file-Mentions
+  taskTitle?: string; // Für file-Mentions: zugehörige Aufgabe
 }
 
 export interface ChatMessage {
