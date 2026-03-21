@@ -221,6 +221,15 @@ export const LINK_TYPE_LABELS: Record<LinkType, string> = {
 };
 
 // --- Chat ---
+export interface ChatGroup {
+  id: string;
+  name: string;
+  description: string;
+  createdBy: string;
+  members: string[]; // UIDs, leer = alle
+  createdAt: Timestamp;
+}
+
 export interface ChatMention {
   type: "task" | "user";
   id: string;
@@ -230,6 +239,7 @@ export interface ChatMention {
 export interface ChatMessage {
   id: string;
   uid: string;
+  groupId: string;
   displayName: string;
   content: string;
   attachments: TaskAttachment[];

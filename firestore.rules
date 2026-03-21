@@ -97,5 +97,21 @@ service cloud.firestore {
       allow create: if isAuthenticated();
       allow update, delete: if isAdmin();
     }
+
+    // Chat Groups
+    match /chatGroups/{groupId} {
+      allow read: if isAuthenticated();
+      allow create: if isManager();
+      allow update: if isManager();
+      allow delete: if isAdmin();
+    }
+
+    // Chat Messages
+    match /chatMessages/{messageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && resource.data.uid == request.auth.uid;
+      allow delete: if isAdmin() || resource.data.uid == request.auth.uid;
+    }
   }
 }

@@ -16,9 +16,11 @@ import {
 } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase/firebase";
-import { ChatMessage, ChatMention, TaskAttachment, AppUser, Task } from "@/lib/types";
+import { ChatMessage, ChatMention, ChatGroup, TaskAttachment, AppUser, Task, canManageTasks } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { Textarea } from "@/components/ui/Textarea";
 import {
   Send,
   Paperclip,
@@ -31,6 +33,11 @@ import {
   AtSign,
   Loader2,
   Camera,
+  Plus,
+  Hash,
+  Users,
+  ChevronLeft,
+  Settings,
 } from "lucide-react";
 
 export default function ChatPage() {
@@ -54,7 +61,6 @@ function getFileIcon(name: string) {
   return <File className="h-4 w-4 text-gray-500" />;
 }
 
-// Farben für User-Avatare
 const AVATAR_COLORS = [
   "bg-blue-500", "bg-green-500", "bg-purple-500", "bg-orange-500",
   "bg-pink-500", "bg-cyan-500", "bg-yellow-500", "bg-red-500",
@@ -81,7 +87,6 @@ function renderMessageContent(content: string, mentions: ChatMention[]) {
     return <span className="whitespace-pre-wrap">{content}</span>;
   }
 
-  // @mentions im Text finden und durch Links ersetzen
   const parts: React.ReactNode[] = [];
   let remaining = content;
   let key = 0;
@@ -91,12 +96,10 @@ function renderMessageContent(content: string, mentions: ChatMention[]) {
     const idx = remaining.indexOf(tag);
     if (idx === -1) return;
 
-    // Text vor dem Mention
     if (idx > 0) {
       parts.push(<span key={key++} className="whitespace-pre-wrap">{remaining.slice(0, idx)}</span>);
     }
 
-    // Mention als klickbarer Link
     if (mention.type === "task") {
       parts.push(
         <a
@@ -141,6 +144,16 @@ function ChatContent() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
+  // Gruppen
+  const [groups, setGroups] = useState<ChatGroup[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string>("allgemein");
+  const [showGroupSidebar, setShowGroupSidebar] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupDesc, setNewGroupDesc] = useState("");
+  const [newGroupMembers, setNewGroupMembers] = useState<string[]>([]);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
   // @-Mention State
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
@@ -157,6 +170,8 @@ function ChatContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
+  const isManager = canManageTasks(role);
+
   // Team + Aufgaben laden
   useEffect(() => {
     async function loadData() {
@@ -171,10 +186,23 @@ function ChatContent() {
     loadData();
   }, []);
 
-  // Echtzeit-Nachrichten mit onSnapshot
+  // Gruppen laden (Echtzeit)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, "chatGroups"), orderBy("createdAt", "asc")),
+      (snapshot) => {
+        const loaded = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ChatGroup));
+        setGroups(loaded);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // Nachrichten für aktive Gruppe (Echtzeit)
   useEffect(() => {
     const q = query(
       collection(db, "chatMessages"),
+      where("groupId", "==", activeGroupId),
       orderBy("createdAt", "asc"),
       limit(200)
     );
@@ -188,12 +216,24 @@ function ChatContent() {
     });
 
     return () => unsub();
-  }, []);
+  }, [activeGroupId]);
 
   // Auto-Scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Sichtbare Gruppen (nur wo User Mitglied ist oder alle)
+  const visibleGroups = useMemo(() => {
+    if (!user) return [];
+    return groups.filter(
+      (g) => g.members.length === 0 || g.members.includes(user.uid)
+    );
+  }, [groups, user]);
+
+  const activeGroup = useMemo(() => {
+    return groups.find((g) => g.id === activeGroupId);
+  }, [groups, activeGroupId]);
 
   // @-Mention Vorschläge
   const mentionSuggestions = useMemo(() => {
@@ -218,12 +258,10 @@ function ChatContent() {
     return results;
   }, [showMentions, mentionQuery, mentionType, teamMembers, tasks]);
 
-  // Input-Handler mit @-Mention Detection
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setInput(val);
 
-    // Check if @ was typed
     const cursorPos = e.target.selectionStart || 0;
     const textBeforeCursor = val.slice(0, cursorPos);
     const atMatch = textBeforeCursor.match(/@(\S*)$/);
@@ -237,7 +275,6 @@ function ChatContent() {
     }
   };
 
-  // Mention auswählen
   const selectMention = useCallback(
     (suggestion: { type: "task" | "user"; id: string; label: string }) => {
       const cursorPos = inputRef.current?.selectionStart || 0;
@@ -258,7 +295,6 @@ function ChatContent() {
     [input, pendingMentions]
   );
 
-  // Tastatur-Navigation in Mentions
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showMentions && mentionSuggestions.length > 0) {
       if (e.key === "ArrowDown") {
@@ -276,7 +312,6 @@ function ChatContent() {
       return;
     }
 
-    // Shift+Enter für neue Zeile, Enter zum Senden
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -322,6 +357,7 @@ function ChatContent() {
     setUploading(false);
     setUploadProgress(0);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
   };
 
   // Nachricht senden
@@ -332,6 +368,7 @@ function ChatContent() {
     try {
       await addDoc(collection(db, "chatMessages"), {
         uid: user.uid,
+        groupId: activeGroupId,
         displayName: displayName || user.email,
         content: input.trim(),
         attachments,
@@ -349,197 +386,150 @@ function ChatContent() {
     }
   };
 
+  // Gruppe erstellen
+  const handleCreateGroup = async () => {
+    if (!newGroupName.trim() || !user) return;
+    setCreatingGroup(true);
+
+    try {
+      await addDoc(collection(db, "chatGroups"), {
+        name: newGroupName.trim(),
+        description: newGroupDesc.trim(),
+        createdBy: user.uid,
+        members: newGroupMembers, // leer = alle
+        createdAt: Timestamp.now(),
+      });
+
+      setNewGroupName("");
+      setNewGroupDesc("");
+      setNewGroupMembers([]);
+      setShowCreateGroup(false);
+    } catch (err) {
+      console.error("Create group error:", err);
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  const switchGroup = (groupId: string) => {
+    setActiveGroupId(groupId);
+    setShowGroupSidebar(false);
+  };
+
   return (
-    <div className="flex flex-col h-[calc(100vh-5rem)] lg:h-[calc(100vh-4rem)]">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-gray-200 pb-2 mb-2 sm:pb-3 sm:mb-3 shrink-0">
-        <div>
-          <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Team-Chat</h1>
-          <p className="text-xs sm:text-sm text-gray-500">{teamMembers.length} Mitglieder</p>
+    <div className="flex h-[calc(100vh-5rem)] lg:h-[calc(100vh-4rem)]">
+      {/* Gruppen-Sidebar Desktop */}
+      <div className="hidden sm:flex w-56 flex-col border-r border-gray-200 bg-white shrink-0">
+        <div className="flex items-center justify-between px-3 py-3 border-b border-gray-200">
+          <h2 className="text-sm font-semibold text-gray-700">Gruppen</h2>
+          {isManager && (
+            <button
+              onClick={() => setShowCreateGroup(true)}
+              className="rounded-md p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+              title="Neue Gruppe"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-400">
-          <span className="inline-block h-2 w-2 rounded-full bg-green-400" />
-          Live
+
+        <div className="flex-1 overflow-y-auto py-1">
+          {/* Allgemein (Standard) */}
+          <button
+            onClick={() => switchGroup("allgemein")}
+            className={`flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors ${
+              activeGroupId === "allgemein"
+                ? "bg-blue-50 text-blue-700 font-medium"
+                : "text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            <Hash className="h-4 w-4 shrink-0" />
+            <span className="truncate">Allgemein</span>
+          </button>
+
+          {visibleGroups.map((group) => (
+            <button
+              key={group.id}
+              onClick={() => switchGroup(group.id)}
+              className={`flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                activeGroupId === group.id
+                  ? "bg-blue-50 text-blue-700 font-medium"
+                  : "text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              {group.members.length > 0 ? (
+                <Users className="h-4 w-4 shrink-0" />
+              ) : (
+                <Hash className="h-4 w-4 shrink-0" />
+              )}
+              <span className="truncate">{group.name}</span>
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Nachrichten-Bereich */}
-      <div className="flex-1 overflow-y-auto space-y-1 pr-2 min-h-0">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400">
-            <AtSign className="h-12 w-12 mb-3" />
-            <p className="text-lg font-medium">Noch keine Nachrichten</p>
-            <p className="text-sm">Starte die Konversation! Nutze @aufgabe oder @person um Dinge zu verlinken.</p>
-          </div>
-        ) : (
-          messages.map((msg, i) => {
-            const isOwn = msg.uid === user?.uid;
-            const prevMsg = i > 0 ? messages[i - 1] : null;
-            const sameSender = prevMsg?.uid === msg.uid;
-            const msgTime = msg.createdAt?.toDate();
-            const prevTime = prevMsg?.createdAt?.toDate();
-            const timeDiff = msgTime && prevTime ? (msgTime.getTime() - prevTime.getTime()) / 60000 : 999;
-            const showHeader = !sameSender || timeDiff > 5;
-
-            return (
-              <div key={msg.id} className={`${showHeader ? "mt-4" : "mt-0.5"}`}>
-                {showHeader && (
-                  <div className="flex items-center gap-2 mb-1">
-                    <div
-                      className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold text-white ${getAvatarColor(msg.uid)}`}
-                    >
-                      {getInitials(msg.displayName || "?")}
-                    </div>
-                    <span className="text-sm font-semibold text-gray-900">
-                      {msg.displayName}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {msgTime?.toLocaleString("de-DE", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
-                )}
-
-                <div className={`${showHeader ? "ml-9" : "ml-9"}`}>
-                  {/* Text */}
-                  {msg.content && (
-                    <div className="text-sm text-gray-800 leading-relaxed">
-                      {renderMessageContent(msg.content, msg.mentions)}
-                    </div>
-                  )}
-
-                  {/* Bild-Attachments inline */}
-                  {msg.attachments?.filter((a) => isImageFile(a.name)).length > 0 && (
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {msg.attachments
-                        .filter((a) => isImageFile(a.name))
-                        .map((att, j) => (
-                          <button
-                            key={j}
-                            onClick={() => setPreviewImage(att.url)}
-                            className="block overflow-hidden rounded-lg border border-gray-200 hover:border-blue-400 transition-colors"
-                          >
-                            <img
-                              src={att.url}
-                              alt={att.name}
-                              className="max-w-[200px] sm:max-w-xs max-h-40 sm:max-h-48 object-cover"
-                              loading="lazy"
-                            />
-                          </button>
-                        ))}
-                    </div>
-                  )}
-
-                  {/* Nicht-Bild-Attachments */}
-                  {msg.attachments?.filter((a) => !isImageFile(a.name)).length > 0 && (
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {msg.attachments
-                        .filter((a) => !isImageFile(a.name))
-                        .map((att, j) => (
-                          <a
-                            key={j}
-                            href={att.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm hover:bg-gray-100 transition-colors"
-                          >
-                            {getFileIcon(att.name)}
-                            <span className="text-blue-600 truncate max-w-[200px]">{att.name}</span>
-                          </a>
-                        ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Anhang-Vorschau */}
-      {attachments.length > 0 && (
-        <div className="border-t border-gray-200 pt-2 px-1 shrink-0">
-          <div className="flex flex-wrap gap-2">
-            {attachments.map((att, i) => (
-              <div key={i} className="relative group">
-                {isImageFile(att.name) ? (
-                  <img src={att.url} alt={att.name} className="h-16 w-16 rounded-lg object-cover border border-gray-200" />
-                ) : (
-                  <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs">
-                    {getFileIcon(att.name)}
-                    <span className="truncate max-w-[120px]">{att.name}</span>
-                  </div>
+      {/* Mobile Gruppen-Overlay */}
+      {showGroupSidebar && (
+        <div className="fixed inset-0 z-50 sm:hidden">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowGroupSidebar(false)} />
+          <div className="absolute inset-y-0 left-0 w-72 bg-white shadow-xl flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <h2 className="font-semibold text-gray-900">Gruppen</h2>
+              <div className="flex items-center gap-2">
+                {isManager && (
+                  <button
+                    onClick={() => { setShowCreateGroup(true); setShowGroupSidebar(false); }}
+                    className="rounded-md p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+                  >
+                    <Plus className="h-5 w-5" />
+                  </button>
                 )}
                 <button
-                  onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}
-                  className="absolute -top-1 -right-1 rounded-full bg-red-500 text-white p-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                  onClick={() => setShowGroupSidebar(false)}
+                  className="rounded-md p-1.5 text-gray-400 hover:text-gray-900"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-5 w-5" />
                 </button>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Upload-Fortschritt */}
-      {uploading && (
-        <div className="px-1 shrink-0">
-          <div className="h-1 rounded-full bg-gray-200 overflow-hidden">
-            <div className="h-full bg-blue-600 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} />
-          </div>
-        </div>
-      )}
-
-      {/* @-Mention Dropdown */}
-      {showMentions && mentionSuggestions.length > 0 && (
-        <div className="relative shrink-0">
-          <div className="absolute bottom-0 left-0 right-0 z-10 mb-1 rounded-lg border border-gray-200 bg-white shadow-lg max-h-60 overflow-y-auto">
-            {/* Tabs */}
-            <div className="flex border-b border-gray-100 px-2 pt-2 gap-1">
-              {(["all", "user", "task"] as const).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => { setMentionType(type); setMentionIndex(0); }}
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                    mentionType === type ? "bg-blue-100 text-blue-700" : "text-gray-500 hover:bg-gray-100"
-                  }`}
-                >
-                  {type === "all" ? "Alle" : type === "user" ? "Personen" : "Aufgaben"}
-                </button>
-              ))}
             </div>
 
-            <div className="py-1">
-              {mentionSuggestions.map((s, i) => (
+            <div className="flex-1 overflow-y-auto py-1">
+              <button
+                onClick={() => switchGroup("allgemein")}
+                className={`flex w-full items-center gap-3 px-4 py-3 text-sm transition-colors ${
+                  activeGroupId === "allgemein"
+                    ? "bg-blue-50 text-blue-700 font-medium"
+                    : "text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                <Hash className="h-5 w-5 shrink-0" />
+                <div className="text-left">
+                  <p>Allgemein</p>
+                  <p className="text-xs text-gray-400">Alle Mitglieder</p>
+                </div>
+              </button>
+
+              {visibleGroups.map((group) => (
                 <button
-                  key={`${s.type}-${s.id}`}
-                  onClick={() => selectMention(s)}
-                  className={`flex w-full items-center gap-3 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors ${
-                    i === mentionIndex ? "bg-blue-50" : ""
+                  key={group.id}
+                  onClick={() => switchGroup(group.id)}
+                  className={`flex w-full items-center gap-3 px-4 py-3 text-sm transition-colors ${
+                    activeGroupId === group.id
+                      ? "bg-blue-50 text-blue-700 font-medium"
+                      : "text-gray-600 hover:bg-gray-50"
                   }`}
                 >
-                  {s.type === "user" ? (
-                    <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold text-white ${getAvatarColor(s.id)}`}>
-                      {getInitials(s.label)}
-                    </div>
+                  {group.members.length > 0 ? (
+                    <Users className="h-5 w-5 shrink-0" />
                   ) : (
-                    <ClipboardList className="h-5 w-5 text-blue-500" />
+                    <Hash className="h-5 w-5 shrink-0" />
                   )}
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-900 truncate">{s.label}</p>
-                    {s.sub && (
-                      <p className="text-xs text-gray-400 capitalize">{s.sub}</p>
+                  <div className="text-left">
+                    <p>{group.name}</p>
+                    {group.description && (
+                      <p className="text-xs text-gray-400 truncate">{group.description}</p>
                     )}
                   </div>
-                  <span className="text-xs text-gray-400">
-                    {s.type === "user" ? "Person" : "Aufgabe"}
-                  </span>
                 </button>
               ))}
             </div>
@@ -547,84 +537,381 @@ function ChatContent() {
         </div>
       )}
 
-      {/* Eingabe */}
-      <div className="border-t border-gray-200 pt-2 sm:pt-3 shrink-0">
-        <div className="flex items-end gap-1 sm:gap-2">
-          {/* Hidden file inputs */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-          <input
-            ref={cameraInputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-
-          {/* Kamera-Button (immer sichtbar, öffnet Kamera auf Mobile) */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => cameraInputRef.current?.click()}
-            disabled={uploading}
-            className="shrink-0"
-            title="Foto aufnehmen"
+      {/* Chat-Bereich */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <div className="flex items-center gap-3 border-b border-gray-200 pb-2 mb-2 sm:pb-3 sm:mb-3 shrink-0">
+          {/* Mobile: Gruppen-Button */}
+          <button
+            onClick={() => setShowGroupSidebar(true)}
+            className="sm:hidden p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
           >
-            <Camera className="h-5 w-5" />
-          </Button>
+            <Users className="h-5 w-5" />
+          </button>
 
-          {/* Datei-Button */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="shrink-0"
-            title="Datei hochladen"
-          >
-            {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
-          </Button>
-
-          <div className="relative flex-1 min-w-0">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              placeholder="Nachricht... (@ für Mentions)"
-              className="w-full resize-none rounded-xl border border-gray-300 bg-white px-3 sm:px-4 py-2 sm:py-2.5 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none max-h-32"
-              rows={1}
-              style={{ minHeight: "40px" }}
-              onInput={(e) => {
-                const el = e.target as HTMLTextAreaElement;
-                el.style.height = "auto";
-                el.style.height = Math.min(el.scrollHeight, 128) + "px";
-              }}
-            />
+          <div className="flex-1 min-w-0">
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Hash className="h-5 w-5 text-gray-400 hidden sm:block" />
+              {activeGroupId === "allgemein" ? "Allgemein" : activeGroup?.name || "Chat"}
+            </h1>
+            <p className="text-xs sm:text-sm text-gray-500 truncate">
+              {activeGroupId === "allgemein"
+                ? `${teamMembers.length} Mitglieder`
+                : activeGroup?.description || `${activeGroup?.members.length === 0 ? "Alle" : activeGroup?.members.length} Mitglieder`
+              }
+            </p>
           </div>
 
-          <Button
-            type="button"
-            onClick={handleSend}
-            disabled={sending || (!input.trim() && attachments.length === 0)}
-            className="rounded-xl shrink-0"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className="inline-block h-2 w-2 rounded-full bg-green-400" />
+            <span className="hidden sm:inline">Live</span>
+          </div>
         </div>
 
-        <p className="mt-1 text-xs text-gray-400 text-center hidden sm:block">
-          <kbd className="rounded bg-gray-100 px-1 py-0.5 text-[10px]">Enter</kbd> Senden · <kbd className="rounded bg-gray-100 px-1 py-0.5 text-[10px]">Shift+Enter</kbd> Neue Zeile · <kbd className="rounded bg-gray-100 px-1 py-0.5 text-[10px]">@</kbd> Aufgabe/Person verlinken
-        </p>
+        {/* Nachrichten-Bereich */}
+        <div className="flex-1 overflow-y-auto space-y-1 pr-2 min-h-0">
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400">
+              <Hash className="h-12 w-12 mb-3" />
+              <p className="text-lg font-medium">Noch keine Nachrichten</p>
+              <p className="text-sm text-center px-4">
+                Starte die Konversation in <strong>#{activeGroupId === "allgemein" ? "Allgemein" : activeGroup?.name}</strong>
+              </p>
+            </div>
+          ) : (
+            messages.map((msg, i) => {
+              const isOwn = msg.uid === user?.uid;
+              const prevMsg = i > 0 ? messages[i - 1] : null;
+              const sameSender = prevMsg?.uid === msg.uid;
+              const msgTime = msg.createdAt?.toDate();
+              const prevTime = prevMsg?.createdAt?.toDate();
+              const timeDiff = msgTime && prevTime ? (msgTime.getTime() - prevTime.getTime()) / 60000 : 999;
+              const showHeader = !sameSender || timeDiff > 5;
+
+              return (
+                <div key={msg.id} className={`${showHeader ? "mt-4" : "mt-0.5"}`}>
+                  {showHeader && (
+                    <div className="flex items-center gap-2 mb-1">
+                      <div
+                        className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold text-white ${getAvatarColor(msg.uid)}`}
+                      >
+                        {getInitials(msg.displayName || "?")}
+                      </div>
+                      <span className="text-sm font-semibold text-gray-900">
+                        {msg.displayName}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {msgTime?.toLocaleString("de-DE", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="ml-9">
+                    {msg.content && (
+                      <div className="text-sm text-gray-800 leading-relaxed">
+                        {renderMessageContent(msg.content, msg.mentions)}
+                      </div>
+                    )}
+
+                    {msg.attachments?.filter((a) => isImageFile(a.name)).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {msg.attachments
+                          .filter((a) => isImageFile(a.name))
+                          .map((att, j) => (
+                            <button
+                              key={j}
+                              onClick={() => setPreviewImage(att.url)}
+                              className="block overflow-hidden rounded-lg border border-gray-200 hover:border-blue-400 transition-colors"
+                            >
+                              <img
+                                src={att.url}
+                                alt={att.name}
+                                className="max-w-[200px] sm:max-w-xs max-h-40 sm:max-h-48 object-cover"
+                                loading="lazy"
+                              />
+                            </button>
+                          ))}
+                      </div>
+                    )}
+
+                    {msg.attachments?.filter((a) => !isImageFile(a.name)).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {msg.attachments
+                          .filter((a) => !isImageFile(a.name))
+                          .map((att, j) => (
+                            <a
+                              key={j}
+                              href={att.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm hover:bg-gray-100 transition-colors"
+                            >
+                              {getFileIcon(att.name)}
+                              <span className="text-blue-600 truncate max-w-[200px]">{att.name}</span>
+                            </a>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Anhang-Vorschau */}
+        {attachments.length > 0 && (
+          <div className="border-t border-gray-200 pt-2 px-1 shrink-0">
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((att, i) => (
+                <div key={i} className="relative group">
+                  {isImageFile(att.name) ? (
+                    <img src={att.url} alt={att.name} className="h-16 w-16 rounded-lg object-cover border border-gray-200" />
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs">
+                      {getFileIcon(att.name)}
+                      <span className="truncate max-w-[120px]">{att.name}</span>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}
+                    className="absolute -top-1 -right-1 rounded-full bg-red-500 text-white p-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Upload-Fortschritt */}
+        {uploading && (
+          <div className="px-1 shrink-0">
+            <div className="h-1 rounded-full bg-gray-200 overflow-hidden">
+              <div className="h-full bg-blue-600 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} />
+            </div>
+          </div>
+        )}
+
+        {/* @-Mention Dropdown */}
+        {showMentions && mentionSuggestions.length > 0 && (
+          <div className="relative shrink-0">
+            <div className="absolute bottom-0 left-0 right-0 z-10 mb-1 rounded-lg border border-gray-200 bg-white shadow-lg max-h-60 overflow-y-auto">
+              <div className="flex border-b border-gray-100 px-2 pt-2 gap-1">
+                {(["all", "user", "task"] as const).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => { setMentionType(type); setMentionIndex(0); }}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                      mentionType === type ? "bg-blue-100 text-blue-700" : "text-gray-500 hover:bg-gray-100"
+                    }`}
+                  >
+                    {type === "all" ? "Alle" : type === "user" ? "Personen" : "Aufgaben"}
+                  </button>
+                ))}
+              </div>
+
+              <div className="py-1">
+                {mentionSuggestions.map((s, i) => (
+                  <button
+                    key={`${s.type}-${s.id}`}
+                    onClick={() => selectMention(s)}
+                    className={`flex w-full items-center gap-3 px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors ${
+                      i === mentionIndex ? "bg-blue-50" : ""
+                    }`}
+                  >
+                    {s.type === "user" ? (
+                      <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold text-white ${getAvatarColor(s.id)}`}>
+                        {getInitials(s.label)}
+                      </div>
+                    ) : (
+                      <ClipboardList className="h-5 w-5 text-blue-500" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{s.label}</p>
+                      {s.sub && (
+                        <p className="text-xs text-gray-400 capitalize">{s.sub}</p>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-400">
+                      {s.type === "user" ? "Person" : "Aufgabe"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Eingabe */}
+        <div className="border-t border-gray-200 pt-2 sm:pt-3 shrink-0">
+          <div className="flex items-end gap-1 sm:gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={uploading}
+              className="shrink-0"
+              title="Foto aufnehmen"
+            >
+              <Camera className="h-5 w-5" />
+            </Button>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="shrink-0"
+              title="Datei hochladen"
+            >
+              {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
+            </Button>
+
+            <div className="relative flex-1 min-w-0">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder={`Nachricht in #${activeGroupId === "allgemein" ? "Allgemein" : activeGroup?.name || "Chat"}...`}
+                className="w-full resize-none rounded-xl border border-gray-300 bg-white px-3 sm:px-4 py-2 sm:py-2.5 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none max-h-32"
+                rows={1}
+                style={{ minHeight: "40px" }}
+                onInput={(e) => {
+                  const el = e.target as HTMLTextAreaElement;
+                  el.style.height = "auto";
+                  el.style.height = Math.min(el.scrollHeight, 128) + "px";
+                }}
+              />
+            </div>
+
+            <Button
+              type="button"
+              onClick={handleSend}
+              disabled={sending || (!input.trim() && attachments.length === 0)}
+              className="rounded-xl shrink-0"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <p className="mt-1 text-xs text-gray-400 text-center hidden sm:block">
+            <kbd className="rounded bg-gray-100 px-1 py-0.5 text-[10px]">Enter</kbd> Senden · <kbd className="rounded bg-gray-100 px-1 py-0.5 text-[10px]">Shift+Enter</kbd> Neue Zeile · <kbd className="rounded bg-gray-100 px-1 py-0.5 text-[10px]">@</kbd> Aufgabe/Person verlinken
+          </p>
+        </div>
       </div>
+
+      {/* Gruppe erstellen Modal */}
+      {showCreateGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">Neue Gruppe erstellen</h2>
+
+            <div className="space-y-4">
+              <Input
+                id="groupName"
+                label="Gruppenname"
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                placeholder="z.B. Marketing-Team"
+                required
+              />
+
+              <Input
+                id="groupDesc"
+                label="Beschreibung (optional)"
+                value={newGroupDesc}
+                onChange={(e) => setNewGroupDesc(e.target.value)}
+                placeholder="Worum geht es in dieser Gruppe?"
+              />
+
+              {/* Mitglieder auswählen */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Mitglieder
+                </label>
+                <p className="text-xs text-gray-400 mb-2">
+                  Keine Auswahl = alle Mitglieder haben Zugang
+                </p>
+                <div className="space-y-1 max-h-40 overflow-y-auto border border-gray-200 rounded-lg p-2">
+                  {teamMembers.map((member) => (
+                    <label
+                      key={member.uid}
+                      className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-50 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={newGroupMembers.includes(member.uid)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setNewGroupMembers([...newGroupMembers, member.uid]);
+                          } else {
+                            setNewGroupMembers(newGroupMembers.filter((id) => id !== member.uid));
+                          }
+                        }}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <div
+                        className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold text-white ${getAvatarColor(member.uid)}`}
+                      >
+                        {getInitials(member.displayName)}
+                      </div>
+                      <span className="text-sm text-gray-700">{member.displayName}</span>
+                      <span className="text-xs text-gray-400 capitalize ml-auto">{member.role}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <Button
+                onClick={handleCreateGroup}
+                disabled={!newGroupName.trim() || creatingGroup}
+              >
+                {creatingGroup ? "Wird erstellt..." : "Gruppe erstellen"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowCreateGroup(false);
+                  setNewGroupName("");
+                  setNewGroupDesc("");
+                  setNewGroupMembers([]);
+                }}
+              >
+                Abbrechen
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Lightbox */}
       {previewImage && (
