@@ -1,0 +1,19 @@
+runConfig:
+  runtime: nodejs20
+  concurrency: 100
+
+env:
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: AIzaSyDpCdILN0oMT1DpZVN1ETQXCRACiFvdFFg
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: komras.firebaseapp.com
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: komras
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: komras.firebasestorage.app
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "577036276254"
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: "1:577036276254:web:2a3615a80a00d9b9a1140f"
+  - variable: GEMINI_API_KEY
+    secret: gemini-api-key

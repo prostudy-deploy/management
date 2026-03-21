@@ -1,0 +1,29 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Authentifizierte Benutzer können Dateien hochladen und lesen
+    match /tasks/{taskId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 25 * 1024 * 1024; // max 25 MB
+    }
+
+    match /submissions/{taskId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 25 * 1024 * 1024; // max 25 MB
+    }
+
+    match /chat/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 25 * 1024 * 1024; // max 25 MB
+    }
+
+    // Alles andere blockieren
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

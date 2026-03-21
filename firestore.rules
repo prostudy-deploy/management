@@ -1,0 +1,101 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return request.auth != null && getUserRole() == 'admin';
+    }
+
+    // Admin oder Verwaltung (gleiche Rechte außer Team + Abrechnungen)
+    function isManager() {
+      return request.auth != null && (getUserRole() == 'admin' || getUserRole() == 'verwaltung');
+    }
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      // Nur Admin darf User bearbeiten (Gehalt, Rolle, etc.)
+      allow update, delete: if isAdmin();
+    }
+
+    // Tasks Collection
+    match /tasks/{taskId} {
+      allow read: if isAuthenticated() && (
+        isManager() || resource.data.assignedTo == request.auth.uid
+      );
+      allow create: if isManager();
+      allow update: if isAuthenticated() && (
+        isManager() || resource.data.assignedTo == request.auth.uid
+      );
+      allow delete: if isManager();
+    }
+
+    // Submissions Collection
+    match /submissions/{submissionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isManager();
+      allow delete: if isManager();
+    }
+
+    // Reviews Collection
+    match /reviews/{reviewId} {
+      allow read: if isAuthenticated();
+      allow create: if isManager();
+      allow update: if isManager();
+      allow delete: if isManager();
+    }
+
+    // Projects Collection
+    match /projects/{projectId} {
+      allow read: if isAuthenticated();
+      allow create: if isManager();
+      allow update: if isManager();
+      allow delete: if isAdmin();
+    }
+
+    // Budgets Collection
+    match /budgets/{budgetId} {
+      allow read: if isManager();
+      allow write: if isManager();
+    }
+
+    // Invitations Collection
+    match /invitations/{invitationId} {
+      allow read: if true;
+      allow create: if isAdmin();
+      allow update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Active Timers (laufende Stoppuhren)
+    match /activeTimers/{userId} {
+      allow read: if isAuthenticated() && (isManager() || isOwner(userId));
+      allow create, update: if isAuthenticated() && isOwner(userId);
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+
+    // Time Entries (gespeicherte Arbeitszeiten)
+    match /timeEntries/{entryId} {
+      allow read: if isAuthenticated() && (
+        isManager() || resource.data.uid == request.auth.uid
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+  }
+}
