@@ -7,6 +7,8 @@ import {
   collection,
   addDoc,
   getDocs,
+  doc,
+  updateDoc,
   query,
   orderBy,
   onSnapshot,
@@ -14,6 +16,7 @@ import {
   limit,
   where,
 } from "firebase/firestore";
+import { toast } from "sonner";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase/firebase";
 import { ChatMessage, ChatMention, ChatGroup, TaskAttachment, AppUser, Task, Submission, canManageTasks } from "@/lib/types";
@@ -477,11 +480,11 @@ function ChatContent() {
     setCreatingGroup(true);
 
     try {
-      await addDoc(collection(db, "chatGroups"), {
+      const docRef = await addDoc(collection(db, "chatGroups"), {
         name: newGroupName.trim(),
         description: newGroupDesc.trim(),
         createdBy: user.uid,
-        members: newGroupMembers, // leer = alle
+        members: newGroupMembers,
         createdAt: Timestamp.now(),
       });
 
@@ -489,10 +492,37 @@ function ChatContent() {
       setNewGroupDesc("");
       setNewGroupMembers([]);
       setShowCreateGroup(false);
+      setActiveGroupId(docRef.id);
+      toast.success("Gruppe erstellt!");
     } catch (err) {
       console.error("Create group error:", err);
+      toast.error("Fehler beim Erstellen der Gruppe. Prüfe die Firestore-Regeln.");
     } finally {
       setCreatingGroup(false);
+    }
+  };
+
+  // Mitglieder verwalten
+  const [showManageMembers, setShowManageMembers] = useState(false);
+  const [editMembers, setEditMembers] = useState<string[]>([]);
+
+  const openManageMembers = () => {
+    if (!activeGroup) return;
+    setEditMembers([...activeGroup.members]);
+    setShowManageMembers(true);
+  };
+
+  const saveMembers = async () => {
+    if (!activeGroup) return;
+    try {
+      await updateDoc(doc(db, "chatGroups", activeGroup.id), {
+        members: editMembers,
+      });
+      setShowManageMembers(false);
+      toast.success("Mitglieder aktualisiert!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Fehler beim Speichern.");
     }
   };
 
@@ -647,9 +677,22 @@ function ChatContent() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <span className="inline-block h-2 w-2 rounded-full bg-green-400" />
-            <span className="hidden sm:inline">Live</span>
+          <div className="flex items-center gap-2">
+            {/* Mitglieder verwalten - nur bei Gruppen (nicht Allgemein) */}
+            {isManager && activeGroupId !== "allgemein" && activeGroup && (
+              <button
+                onClick={openManageMembers}
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 transition-colors"
+                title="Mitglieder verwalten"
+              >
+                <Users className="h-4 w-4" />
+                <span className="hidden sm:inline">Mitglieder</span>
+              </button>
+            )}
+            <div className="flex items-center gap-1 text-xs text-gray-400">
+              <span className="inline-block h-2 w-2 rounded-full bg-green-400" />
+              <span className="hidden sm:inline">Live</span>
+            </div>
           </div>
         </div>
 
@@ -1010,6 +1053,57 @@ function ChatContent() {
                   setNewGroupMembers([]);
                 }}
               >
+                Abbrechen
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mitglieder verwalten Modal */}
+      {showManageMembers && activeGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">Mitglieder verwalten</h2>
+            <p className="text-sm text-gray-500 mb-4">#{activeGroup.name}</p>
+
+            <div>
+              <p className="text-xs text-gray-400 mb-2">
+                Keine Auswahl = alle Mitglieder haben Zugang
+              </p>
+              <div className="space-y-1 max-h-60 overflow-y-auto border border-gray-200 rounded-lg p-2">
+                {teamMembers.map((member) => (
+                  <label
+                    key={member.uid}
+                    className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-50 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={editMembers.includes(member.uid)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setEditMembers([...editMembers, member.uid]);
+                        } else {
+                          setEditMembers(editMembers.filter((id) => id !== member.uid));
+                        }
+                      }}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div
+                      className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold text-white ${getAvatarColor(member.uid)}`}
+                    >
+                      {getInitials(member.displayName)}
+                    </div>
+                    <span className="text-sm text-gray-700">{member.displayName}</span>
+                    <span className="text-xs text-gray-400 capitalize ml-auto">{member.role}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <Button onClick={saveMembers}>Speichern</Button>
+              <Button variant="secondary" onClick={() => setShowManageMembers(false)}>
                 Abbrechen
               </Button>
             </div>
