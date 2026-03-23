@@ -20,7 +20,7 @@ import {
 import { toast } from "sonner";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase/firebase";
-import { ChatMessage, ChatMention, ChatGroup, TaskAttachment, AppUser, Task, Submission, canManageTasks } from "@/lib/types";
+import { ChatMessage, ChatMention, ChatGroup, ChatPoll, PollOption, TaskAttachment, AppUser, Task, Submission, canManageTasks } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -51,6 +51,10 @@ import {
   Users,
   ChevronLeft,
   Settings,
+  BarChart3,
+  Vote,
+  Trash2,
+  Lock,
 } from "lucide-react";
 
 export default function ChatPage() {
@@ -193,6 +197,13 @@ function ChatContent() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [allFiles, setAllFiles] = useState<FileInfo[]>([]);
 
+  // Abstimmungen
+  const [polls, setPolls] = useState<ChatPoll[]>([]);
+  const [showPollForm, setShowPollForm] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const [pollMultiple, setPollMultiple] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -282,6 +293,19 @@ function ChatContent() {
       setMessages(msgs);
     });
 
+    return () => unsub();
+  }, [activeGroupId]);
+
+  // Abstimmungen für aktive Gruppe (Echtzeit)
+  useEffect(() => {
+    const q = query(
+      collection(db, "chatPolls"),
+      where("groupId", "==", activeGroupId),
+      orderBy("createdAt", "asc")
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      setPolls(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ChatPoll)));
+    });
     return () => unsub();
   }, [activeGroupId]);
 
@@ -473,6 +497,85 @@ function ChatContent() {
       console.error("Send error:", err);
     } finally {
       setSending(false);
+    }
+  };
+
+  // --- Abstimmungen ---
+  const createPoll = async () => {
+    if (!pollQuestion.trim() || !user) return;
+    const validOptions = pollOptions.filter((o) => o.trim());
+    if (validOptions.length < 2) { toast.error("Mindestens 2 Optionen nötig."); return; }
+
+    try {
+      const pollData = {
+        question: pollQuestion.trim(),
+        options: validOptions.map((text, i) => ({
+          id: `opt_${i}_${Date.now()}`,
+          text: text.trim(),
+          votes: [],
+        })),
+        multipleChoice: pollMultiple,
+        createdBy: user.uid,
+        groupId: activeGroupId,
+        createdAt: Timestamp.now(),
+        closed: false,
+      };
+      const pollRef = await addDoc(collection(db, "chatPolls"), pollData);
+
+      // System-Nachricht mit Poll-Referenz
+      await addDoc(collection(db, "chatMessages"), {
+        uid: user.uid,
+        groupId: activeGroupId,
+        displayName: displayName || user.email,
+        content: `hat eine Abstimmung erstellt: "${pollQuestion.trim()}"`,
+        attachments: [],
+        mentions: [],
+        pollId: pollRef.id,
+        createdAt: Timestamp.now(),
+      });
+
+      setPollQuestion("");
+      setPollOptions(["", ""]);
+      setPollMultiple(false);
+      setShowPollForm(false);
+      toast.success("Abstimmung erstellt!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Fehler beim Erstellen.");
+    }
+  };
+
+  const votePoll = async (pollId: string, optionId: string) => {
+    if (!user) return;
+    const poll = polls.find((p) => p.id === pollId);
+    if (!poll || poll.closed) return;
+
+    const updatedOptions = poll.options.map((opt) => {
+      if (opt.id === optionId) {
+        // Toggle vote
+        const hasVoted = opt.votes.includes(user.uid);
+        return { ...opt, votes: hasVoted ? opt.votes.filter((v) => v !== user.uid) : [...opt.votes, user.uid] };
+      }
+      // If not multiple choice, remove vote from other options
+      if (!poll.multipleChoice) {
+        return { ...opt, votes: opt.votes.filter((v) => v !== user.uid) };
+      }
+      return opt;
+    });
+
+    try {
+      await updateDoc(doc(db, "chatPolls", pollId), { options: updatedOptions });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const closePoll = async (pollId: string) => {
+    try {
+      await updateDoc(doc(db, "chatPolls", pollId), { closed: true });
+      toast.success("Abstimmung geschlossen.");
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -787,6 +890,76 @@ function ChatContent() {
                           ))}
                       </div>
                     )}
+
+                    {/* Abstimmung anzeigen */}
+                    {msg.pollId && (() => {
+                      const poll = polls.find((p) => p.id === msg.pollId);
+                      if (!poll) return null;
+                      const totalVotes = poll.options.reduce((s, o) => s + o.votes.length, 0);
+                      const canClose = poll.createdBy === user?.uid || canManageTasks(role);
+
+                      return (
+                        <div className="mt-2 rounded-xl border border-purple-200 bg-purple-50/50 p-4 max-w-sm">
+                          <div className="flex items-center gap-2 mb-3">
+                            <BarChart3 className="h-4 w-4 text-purple-600" />
+                            <span className="text-sm font-semibold text-gray-900">{poll.question}</span>
+                            {poll.closed && (
+                              <span className="text-xs bg-gray-200 text-gray-600 rounded-full px-2 py-0.5 flex items-center gap-1">
+                                <Lock className="h-3 w-3" />
+                                Geschlossen
+                              </span>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            {poll.options.map((opt) => {
+                              const hasVoted = opt.votes.includes(user?.uid || "");
+                              const pct = totalVotes > 0 ? Math.round((opt.votes.length / totalVotes) * 100) : 0;
+
+                              return (
+                                <button
+                                  key={opt.id}
+                                  onClick={() => !poll.closed && votePoll(poll.id, opt.id)}
+                                  disabled={poll.closed}
+                                  className={`w-full text-left rounded-lg border px-3 py-2 transition-all relative overflow-hidden ${
+                                    hasVoted
+                                      ? "border-purple-400 bg-purple-100"
+                                      : "border-gray-200 bg-white hover:border-purple-300"
+                                  } ${poll.closed ? "cursor-default" : "cursor-pointer"}`}
+                                >
+                                  {/* Progress bar */}
+                                  <div
+                                    className="absolute inset-0 bg-purple-200/40 transition-all"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                  <div className="relative flex items-center justify-between">
+                                    <span className={`text-sm ${hasVoted ? "font-semibold text-purple-800" : "text-gray-700"}`}>
+                                      {opt.text}
+                                    </span>
+                                    <span className="text-xs text-gray-500 ml-2 shrink-0">
+                                      {opt.votes.length} ({pct}%)
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="flex items-center justify-between mt-2">
+                            <p className="text-xs text-gray-400">
+                              {totalVotes} Stimme{totalVotes !== 1 ? "n" : ""}
+                              {poll.multipleChoice && " · Mehrfachauswahl"}
+                            </p>
+                            {canClose && !poll.closed && (
+                              <button
+                                onClick={() => closePoll(poll.id)}
+                                className="text-xs text-gray-500 hover:text-red-600 transition-colors"
+                              >
+                                Schließen
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               );
@@ -917,6 +1090,17 @@ function ChatContent() {
               className="hidden"
               onChange={handleFileUpload}
             />
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowPollForm(true)}
+              className="shrink-0"
+              title="Abstimmung erstellen"
+            >
+              <BarChart3 className="h-5 w-5" />
+            </Button>
 
             <Button
               type="button"
@@ -1108,6 +1292,92 @@ function ChatContent() {
               <Button variant="secondary" onClick={() => setShowManageMembers(false)}>
                 Abbrechen
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Abstimmung erstellen Modal */}
+      {showPollForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowPollForm(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <BarChart3 className="h-5 w-5 text-purple-600" />
+                Abstimmung erstellen
+              </h2>
+              <button onClick={() => setShowPollForm(false)} className="p-1 hover:bg-gray-100 rounded">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <Input
+                id="pollQuestion"
+                label="Frage"
+                value={pollQuestion}
+                onChange={(e) => setPollQuestion(e.target.value)}
+                placeholder="z.B. Wann soll das Meeting stattfinden?"
+              />
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Optionen</label>
+                <div className="space-y-2">
+                  {pollOptions.map((opt, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Input
+                        id={`pollOpt${i}`}
+                        value={opt}
+                        onChange={(e) => {
+                          const updated = [...pollOptions];
+                          updated[i] = e.target.value;
+                          setPollOptions(updated);
+                        }}
+                        placeholder={`Option ${i + 1}`}
+                        className="flex-1"
+                      />
+                      {pollOptions.length > 2 && (
+                        <button
+                          onClick={() => setPollOptions(pollOptions.filter((_, j) => j !== i))}
+                          className="p-1.5 hover:text-red-500 text-gray-400"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {pollOptions.length < 8 && (
+                  <button
+                    onClick={() => setPollOptions([...pollOptions, ""])}
+                    className="mt-2 flex items-center gap-1 text-sm text-blue-600 hover:underline"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Option hinzufügen
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="pollMultiple"
+                  checked={pollMultiple}
+                  onChange={(e) => setPollMultiple(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                <label htmlFor="pollMultiple" className="text-sm text-gray-700">Mehrfachauswahl erlauben</label>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button onClick={createPoll} disabled={!pollQuestion.trim() || pollOptions.filter((o) => o.trim()).length < 2}>
+                  <Vote className="h-3.5 w-3.5 mr-1" />
+                  Abstimmung starten
+                </Button>
+                <Button variant="secondary" onClick={() => setShowPollForm(false)}>
+                  Abbrechen
+                </Button>
+              </div>
             </div>
           </div>
         </div>

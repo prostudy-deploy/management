@@ -288,14 +288,24 @@ export const LINK_TYPE_LABELS: Record<LinkType, string> = {
 };
 
 // --- Kalender ---
+export type CalendarCategory = "termin" | "meeting" | "deadline";
+
+export const CALENDAR_CATEGORY_LABELS: Record<CalendarCategory, string> = {
+  termin: "Termin",
+  meeting: "Meeting",
+  deadline: "Deadline",
+};
+
 export interface CalendarEvent {
   id: string;
   title: string;
   description: string;
+  category: CalendarCategory;
   date: Timestamp; // Startdatum/-zeit
   endDate?: Timestamp; // Enddatum/-zeit (optional)
   allDay: boolean;
   color: string; // Hex-Farbe
+  meetingLink?: string; // Google Meet / Zoom Link
   assignedTo: string; // UID des Teilnehmers
   createdBy: string;
   taskId?: string; // Verknüpfung mit Aufgabe
@@ -335,6 +345,24 @@ export interface ChatMention {
   taskTitle?: string; // Für file-Mentions: zugehörige Aufgabe
 }
 
+// --- Abstimmungen ---
+export interface PollOption {
+  id: string;
+  text: string;
+  votes: string[]; // UIDs
+}
+
+export interface ChatPoll {
+  id: string;
+  question: string;
+  options: PollOption[];
+  multipleChoice: boolean;
+  createdBy: string;
+  groupId: string;
+  createdAt: Timestamp;
+  closed: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   uid: string;
@@ -343,6 +371,7 @@ export interface ChatMessage {
   content: string;
   attachments: TaskAttachment[];
   mentions: ChatMention[];
+  pollId?: string; // Verknüpfung mit Abstimmung
   createdAt: Timestamp;
   editedAt?: Timestamp;
 }

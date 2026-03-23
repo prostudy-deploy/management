@@ -126,6 +126,14 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Chat Polls (Abstimmungen)
+    match /chatPolls/{pollId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAdmin() || resource.data.createdBy == request.auth.uid;
+    }
+
     // Chat Messages
     match /chatMessages/{messageId} {
       allow read: if isAuthenticated();

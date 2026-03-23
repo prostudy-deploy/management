@@ -18,6 +18,8 @@ import {
 import { db } from "@/lib/firebase/firebase";
 import {
   CalendarEvent,
+  CalendarCategory,
+  CALENDAR_CATEGORY_LABELS,
   Task,
   Project,
   AppUser,
@@ -44,6 +46,8 @@ import {
   Save,
   Link2,
   Paperclip,
+  Video,
+  ExternalLink,
 } from "lucide-react";
 
 export default function KalenderPage() {
@@ -132,6 +136,8 @@ function KalenderContent() {
   const [formEndTime, setFormEndTime] = useState("10:00");
   const [formAllDay, setFormAllDay] = useState(false);
   const [formColor, setFormColor] = useState("#3B82F6");
+  const [formCategory, setFormCategory] = useState<CalendarCategory>("termin");
+  const [formMeetingLink, setFormMeetingLink] = useState("");
   const [formAssignedTo, setFormAssignedTo] = useState("");
   const [formTaskId, setFormTaskId] = useState("");
   const [formAttachments, setFormAttachments] = useState<TaskAttachment[]>([]);
@@ -188,6 +194,7 @@ function KalenderContent() {
             id: `deadline_${t.id}`,
             title: `Deadline: ${t.title}`,
             description: t.description,
+            category: "deadline" as CalendarCategory,
             date: t.deadline!,
             allDay: true,
             color: proj?.color || "#EF4444",
@@ -264,6 +271,8 @@ function KalenderContent() {
     setFormEndTime("10:00");
     setFormAllDay(false);
     setFormColor("#3B82F6");
+    setFormCategory("termin");
+    setFormMeetingLink("");
     setFormAssignedTo(user?.uid || "");
     setFormTaskId("");
     setFormAttachments([]);
@@ -282,6 +291,8 @@ function KalenderContent() {
     setFormEndTime(ed ? formatTime(ed) : "10:00");
     setFormAllDay(event.allDay);
     setFormColor(event.color);
+    setFormCategory(event.category || "termin");
+    setFormMeetingLink(event.meetingLink || "");
     setFormAssignedTo(event.assignedTo);
     setFormTaskId(event.taskId || "");
     setFormAttachments(event.attachments || []);
@@ -310,10 +321,12 @@ function KalenderContent() {
     const eventData: Record<string, any> = {
       title: formTitle.trim(),
       description: formDescription.trim(),
+      category: formCategory,
       date: Timestamp.fromDate(dateObj),
       endDate: endDateObj ? Timestamp.fromDate(endDateObj) : null,
       allDay: formAllDay,
-      color: formColor,
+      color: formCategory === "meeting" ? "#8B5CF6" : formColor,
+      meetingLink: formCategory === "meeting" ? formMeetingLink.trim() || null : null,
       assignedTo: formAssignedTo || user.uid,
       taskId: formTaskId || null,
       projectId: formTaskId ? tasks.find((t) => t.id === formTaskId)?.projectId || null : null,
@@ -395,7 +408,8 @@ function KalenderContent() {
       >
         <div className="flex items-center gap-2">
           <div className="flex-1 min-w-0">
-            <p className={`font-medium truncate ${compact ? "text-xs" : "text-sm"} text-gray-900`}>
+            <p className={`font-medium truncate ${compact ? "text-xs" : "text-sm"} text-gray-900 flex items-center gap-1`}>
+              {event.category === "meeting" && <Video className="h-3 w-3 text-purple-600 shrink-0" />}
               {event.title}
             </p>
             {!compact && (
@@ -412,6 +426,18 @@ function KalenderContent() {
                 )}
                 {assigneeName && (
                   <span className="text-xs text-gray-400">{assigneeName}</span>
+                )}
+                {event.meetingLink && !compact && (
+                  <a
+                    href={event.meetingLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-xs text-purple-600 hover:underline flex items-center gap-0.5"
+                  >
+                    <Video className="h-3 w-3" />
+                    Meeting
+                  </a>
                 )}
               </div>
             )}
@@ -655,6 +681,20 @@ function KalenderContent() {
                 </p>
               )}
 
+              {/* Meeting Link */}
+              {selectedEvent.meetingLink && (
+                <a
+                  href={selectedEvent.meetingLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-700 hover:bg-purple-100 transition-colors"
+                >
+                  <Video className="h-4 w-4" />
+                  Meeting beitreten
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+
               {/* Verknüpfte Aufgabe */}
               {selectedEvent.taskId && (
                 <a href={`/aufgaben/${selectedEvent.taskId}`} className="text-sm text-blue-600 hover:underline flex items-center gap-1">
@@ -719,13 +759,40 @@ function KalenderContent() {
             </div>
 
             <div className="space-y-4">
-              <Input
-                id="formTitle"
-                label="Titel"
-                value={formTitle}
-                onChange={(e) => setFormTitle(e.target.value)}
-                placeholder="z.B. Team-Meeting"
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input
+                  id="formTitle"
+                  label="Titel"
+                  value={formTitle}
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  placeholder={formCategory === "meeting" ? "z.B. Team-Meeting" : "z.B. Besprechung"}
+                />
+                <Select
+                  id="formCategory"
+                  label="Kategorie"
+                  value={formCategory}
+                  onChange={(e) => {
+                    const cat = e.target.value as CalendarCategory;
+                    setFormCategory(cat);
+                    if (cat === "meeting") setFormColor("#8B5CF6");
+                  }}
+                  options={[
+                    { value: "termin", label: "Termin" },
+                    { value: "meeting", label: "Meeting" },
+                  ]}
+                />
+              </div>
+
+              {formCategory === "meeting" && (
+                <Input
+                  id="formMeetingLink"
+                  label="Meeting-Link (Google Meet, Zoom, etc.)"
+                  type="url"
+                  value={formMeetingLink}
+                  onChange={(e) => setFormMeetingLink(e.target.value)}
+                  placeholder="https://meet.google.com/..."
+                />
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input
