@@ -98,6 +98,14 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // Expenses (Projektausgaben)
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isManager();
+      allow delete: if isManager();
+    }
+
     // Chat Groups
     match /chatGroups/{groupId} {
       allow read: if isAuthenticated();

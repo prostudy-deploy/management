@@ -6,10 +6,10 @@ import { Card, CardTitle, CardContent } from "@/components/ui/Card";
 import { useEffect, useState } from "react";
 import { collection, query, where, getDocs, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase/firebase";
-import { Task, ChatMessage, ApprovalRequest, canManageTasks, APPROVAL_TYPE_LABELS, APPROVAL_STATUS_LABELS, AppUser } from "@/lib/types";
+import { Task, ChatMessage, Expense, Project, ApprovalRequest, canManageTasks, APPROVAL_TYPE_LABELS, EXPENSE_STATUS_LABELS, AppUser } from "@/lib/types";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import Link from "next/link";
-import { ClipboardList, Clock, CheckCircle, AlertCircle, ShieldCheck, MessageSquare, CircleDot, Globe, Paperclip, ShieldQuestion, ArrowRight } from "lucide-react";
+import { ClipboardList, Clock, CheckCircle, AlertCircle, ShieldCheck, MessageSquare, CircleDot, Globe, Paperclip, ShieldQuestion, ArrowRight, Receipt, Euro } from "lucide-react";
 
 interface PendingApprovalItem {
   taskId: string;
@@ -29,6 +29,7 @@ function DashboardContent() {
   const { user, role } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [recentMessages, setRecentMessages] = useState<ChatMessage[]>([]);
+  const [pendingExpenses, setPendingExpenses] = useState<(Expense & { projectName?: string })[]>([]);
   const [teamMembers, setTeamMembers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -54,6 +55,22 @@ function DashboardContent() {
       // Team laden
       const usersSnap = await getDocs(query(collection(db, "users"), where("isActive", "==", true)));
       setTeamMembers(usersSnap.docs.map((d) => ({ uid: d.id, ...d.data() } as AppUser)));
+
+      // Offene Ausgaben laden (nur für Admin/Verwaltung)
+      if (canManageTasks(role)) {
+        const expSnap = await getDocs(
+          query(collection(db, "expenses"), where("status", "==", "pending"), orderBy("createdAt", "desc"))
+        );
+        const expList = expSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Expense));
+
+        if (expList.length > 0) {
+          // Projektnamen laden
+          const projSnap = await getDocs(collection(db, "projects"));
+          const projectNames: Record<string, string> = {};
+          projSnap.docs.forEach((d) => { projectNames[d.id] = (d.data() as any).name; });
+          setPendingExpenses(expList.map((e) => ({ ...e, projectName: projectNames[e.projectId] || "Unbekannt" })));
+        }
+      }
 
       setLoading(false);
     }
@@ -247,6 +264,54 @@ function DashboardContent() {
             )}
           </CardContent>
         </Card>
+
+        {/* Offene Ausgaben */}
+        {canManageTasks(role) && pendingExpenses.length > 0 && (
+          <Card>
+            <CardTitle>
+              <span className="flex items-center justify-between w-full">
+                <span className="flex items-center gap-2">
+                  <Receipt className="h-4 w-4 text-purple-600" />
+                  Offene Ausgaben
+                  <span className="flex items-center gap-1 rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-xs font-medium">
+                    {pendingExpenses.length}
+                  </span>
+                </span>
+              </span>
+            </CardTitle>
+            <CardContent>
+              <div className="divide-y divide-gray-100">
+                {pendingExpenses.slice(0, 10).map((expense) => {
+                  const creatorName = teamMembers.find((m) => m.uid === expense.createdBy)?.displayName || "Unbekannt";
+                  const expDate = expense.createdAt?.toDate?.();
+
+                  return (
+                    <Link
+                      key={expense.id}
+                      href={`/projekte/${expense.projectId}`}
+                      className="flex items-start gap-3 py-3 px-2 hover:bg-gray-50 rounded-lg transition-colors"
+                    >
+                      <span className="shrink-0 rounded-full p-1.5 bg-purple-100 text-purple-700 mt-0.5">
+                        <Euro className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{expense.title}</p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {expense.projectName} · {creatorName}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {expense.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+                          {expDate && ` · ${expDate.toLocaleDateString("de-DE")}`}
+                        </p>
+                      </div>
+                      <ArrowRight className="h-4 w-4 text-gray-400 shrink-0 mt-1" />
+                    </Link>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <Card>

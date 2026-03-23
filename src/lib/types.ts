@@ -191,6 +191,30 @@ export interface Budget {
   updatedAt: Timestamp;
 }
 
+// --- Ausgaben (Projektausgaben mit Freigabe) ---
+export type ExpenseStatus = "pending" | "approved" | "rejected";
+
+export const EXPENSE_STATUS_LABELS: Record<ExpenseStatus, string> = {
+  pending: "Offen",
+  approved: "Genehmigt",
+  rejected: "Abgelehnt",
+};
+
+export interface Expense {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string;
+  amount: number; // Betrag in EUR
+  receipt?: TaskAttachment; // Beleg/Quittung
+  status: ExpenseStatus;
+  createdBy: string;
+  createdAt: Timestamp;
+  respondedBy?: string;
+  respondedAt?: Timestamp;
+  responseNote?: string;
+}
+
 // --- Projekte ---
 export type ProjectStatus = "active" | "completed" | "archived";
 

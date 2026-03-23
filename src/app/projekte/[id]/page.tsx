@@ -3,9 +3,9 @@
 import { useAuth } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/layout/AuthGuard";
 import { useEffect, useState } from "react";
-import { doc, getDoc, updateDoc, Timestamp, collection, query, where, getDocs, orderBy } from "firebase/firestore";
+import { doc, getDoc, updateDoc, addDoc, deleteDoc, Timestamp, collection, query, where, getDocs, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase/firebase";
-import { Project, Task, Budget, PROJECT_STATUS_LABELS, PROJECT_COLORS, ProjectStatus, STATUS_LABELS, PRIORITY_LABELS, canManageTasks } from "@/lib/types";
+import { Project, Task, Budget, Expense, ExpenseStatus, EXPENSE_STATUS_LABELS, PROJECT_STATUS_LABELS, PROJECT_COLORS, ProjectStatus, STATUS_LABELS, PRIORITY_LABELS, TaskAttachment, canManageTasks } from "@/lib/types";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -13,10 +13,11 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Card, CardTitle, CardContent } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
+import { FileUpload, FileList } from "@/components/ui/FileUpload";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, ClipboardList, Wallet, Calendar, Settings, Pencil, Save, X, Clock, CircleDot } from "lucide-react";
+import { ArrowLeft, Plus, ClipboardList, Wallet, Calendar, Settings, Pencil, Save, X, Clock, CircleDot, Receipt, CheckCircle, AlertTriangle, Trash2, MessageSquare, ChevronDown, ChevronUp, Euro } from "lucide-react";
 
 export default function ProjektDetailPage() {
   return (
@@ -34,6 +35,7 @@ function ProjektDetailContent() {
   const [project, setProject] = useState<Project | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -43,6 +45,17 @@ function ProjektDetailContent() {
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editColor, setEditColor] = useState("");
+
+  // Ausgaben
+  const [showExpenseForm, setShowExpenseForm] = useState(false);
+  const [expenseTitle, setExpenseTitle] = useState("");
+  const [expenseDescription, setExpenseDescription] = useState("");
+  const [expenseAmount, setExpenseAmount] = useState("");
+  const [expenseReceipt, setExpenseReceipt] = useState<TaskAttachment[]>([]);
+  const [respondingExpense, setRespondingExpense] = useState<string | null>(null);
+  const [expenseResponseNote, setExpenseResponseNote] = useState("");
+  const [expandedExpenses, setExpandedExpenses] = useState<Set<string>>(new Set());
+  const [teamMembers, setTeamMembers] = useState<{ uid: string; displayName: string }[]>([]);
 
   useEffect(() => {
     async function load() {
@@ -63,6 +76,16 @@ function ProjektDetailContent() {
         query(collection(db, "budgets"), where("projectId", "==", projectId), orderBy("createdAt", "desc"))
       );
       setBudgets(budgetsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Budget)));
+
+      // Ausgaben des Projekts
+      const expensesSnap = await getDocs(
+        query(collection(db, "expenses"), where("projectId", "==", projectId), orderBy("createdAt", "desc"))
+      );
+      setExpenses(expensesSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Expense)));
+
+      // Team laden
+      const usersSnap = await getDocs(query(collection(db, "users"), where("isActive", "==", true)));
+      setTeamMembers(usersSnap.docs.map((d) => ({ uid: d.id, displayName: (d.data() as any).displayName })));
 
       setLoading(false);
     }
@@ -112,6 +135,90 @@ function ProjektDetailContent() {
     }
   };
 
+  // --- Ausgaben ---
+  const submitExpense = async () => {
+    if (!expenseTitle.trim() || !expenseAmount || !user) return;
+    try {
+      const docRef = await addDoc(collection(db, "expenses"), {
+        projectId,
+        title: expenseTitle.trim(),
+        description: expenseDescription.trim(),
+        amount: parseFloat(expenseAmount),
+        receipt: expenseReceipt.length > 0 ? expenseReceipt[0] : null,
+        status: "pending",
+        createdBy: user.uid,
+        createdAt: Timestamp.now(),
+      });
+      const newExpense: Expense = {
+        id: docRef.id,
+        projectId,
+        title: expenseTitle.trim(),
+        description: expenseDescription.trim(),
+        amount: parseFloat(expenseAmount),
+        receipt: expenseReceipt.length > 0 ? expenseReceipt[0] : undefined,
+        status: "pending",
+        createdBy: user.uid,
+        createdAt: Timestamp.now(),
+      };
+      setExpenses([newExpense, ...expenses]);
+      setExpenseTitle("");
+      setExpenseDescription("");
+      setExpenseAmount("");
+      setExpenseReceipt([]);
+      setShowExpenseForm(false);
+      toast.success("Ausgabe eingereicht!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Fehler beim Einreichen.");
+    }
+  };
+
+  const respondToExpense = async (expenseId: string, decision: "approved" | "rejected") => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, "expenses", expenseId), {
+        status: decision,
+        respondedBy: user.uid,
+        respondedAt: Timestamp.now(),
+        responseNote: expenseResponseNote.trim() || null,
+      });
+      setExpenses(expenses.map((e) =>
+        e.id === expenseId
+          ? { ...e, status: decision as ExpenseStatus, respondedBy: user.uid, respondedAt: Timestamp.now(), responseNote: expenseResponseNote.trim() || undefined }
+          : e
+      ));
+      setRespondingExpense(null);
+      setExpenseResponseNote("");
+      toast.success(decision === "approved" ? "Ausgabe genehmigt!" : "Ausgabe abgelehnt.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Fehler.");
+    }
+  };
+
+  const deleteExpense = async (expenseId: string) => {
+    const expense = expenses.find((e) => e.id === expenseId);
+    if (!expense || !user) return;
+    if (expense.createdBy !== user.uid && !canManageTasks(role)) return;
+    try {
+      await deleteDoc(doc(db, "expenses", expenseId));
+      setExpenses(expenses.filter((e) => e.id !== expenseId));
+      toast.success("Ausgabe gelöscht.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Fehler beim Löschen.");
+    }
+  };
+
+  const toggleExpenseExpand = (id: string) => {
+    setExpandedExpenses((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -129,6 +236,10 @@ function ProjektDetailContent() {
   const totalBudget = budgets.reduce((s, b) => s + b.totalBudget, 0);
   const totalSpent = budgets.reduce((s, b) => s + b.spent, 0);
   const budgetPercent = totalBudget > 0 ? Math.min((totalSpent / totalBudget) * 100, 100) : 0;
+
+  const pendingExpenses = expenses.filter((e) => e.status === "pending");
+  const approvedExpensesTotal = expenses.filter((e) => e.status === "approved").reduce((s, e) => s + e.amount, 0);
+  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
 
   return (
     <div>
@@ -247,7 +358,7 @@ function ProjektDetailContent() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
         <Card>
           <div className="flex items-center justify-between">
             <div>
@@ -301,6 +412,249 @@ function ProjektDetailContent() {
             </div>
           </div>
         </Card>
+
+        <Card>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Ausgaben</p>
+              <p className="text-2xl font-bold text-gray-900">{approvedExpensesTotal.toLocaleString("de-DE")} €</p>
+            </div>
+            <Receipt className="h-5 w-5 text-purple-600" />
+          </div>
+          {pendingExpenses.length > 0 && (
+            <div className="mt-2">
+              <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-xs font-medium">
+                <CircleDot className="h-3 w-3" />
+                {pendingExpenses.length} offen
+              </span>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Ausgaben */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Receipt className="h-5 w-5 text-purple-600" />
+            Ausgaben
+            {pendingExpenses.length > 0 && (
+              <span className="flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-xs font-medium">
+                {pendingExpenses.length} offen
+              </span>
+            )}
+          </h2>
+          {!showExpenseForm && (
+            <Button size="sm" onClick={() => setShowExpenseForm(true)}>
+              <Plus className="h-3 w-3 mr-1" />
+              Ausgabe
+            </Button>
+          )}
+        </div>
+
+        {/* Neue Ausgabe Form */}
+        {showExpenseForm && (
+          <Card className="mb-4">
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-800">Neue Ausgabe einreichen</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input
+                  id="expenseTitle"
+                  label="Bezeichnung"
+                  value={expenseTitle}
+                  onChange={(e) => setExpenseTitle(e.target.value)}
+                  placeholder="z.B. Druckkosten Flyer"
+                />
+                <Input
+                  id="expenseAmount"
+                  label="Betrag (€)"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={expenseAmount}
+                  onChange={(e) => setExpenseAmount(e.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+              <Textarea
+                id="expenseDescription"
+                label="Beschreibung (optional)"
+                value={expenseDescription}
+                onChange={(e) => setExpenseDescription(e.target.value)}
+                rows={2}
+                placeholder="Details zur Ausgabe..."
+              />
+              <div>
+                <p className="text-xs font-medium text-gray-700 mb-1">Beleg/Quittung (optional)</p>
+                <FileUpload
+                  storagePath={`projects/${projectId}/expenses`}
+                  attachments={expenseReceipt}
+                  onChange={setExpenseReceipt}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={submitExpense} disabled={!expenseTitle.trim() || !expenseAmount}>
+                  <Receipt className="h-3.5 w-3.5 mr-1" />
+                  Einreichen
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => { setShowExpenseForm(false); setExpenseTitle(""); setExpenseDescription(""); setExpenseAmount(""); setExpenseReceipt([]); }}>
+                  Abbrechen
+                </Button>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Ausgaben-Liste */}
+        {expenses.length === 0 && !showExpenseForm ? (
+          <Card>
+            <p className="text-sm text-gray-500 text-center py-4">Noch keine Ausgaben in diesem Projekt.</p>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {expenses.map((expense) => {
+              const isExpanded = expandedExpenses.has(expense.id);
+              const creatorName = teamMembers.find((m) => m.uid === expense.createdBy)?.displayName || "Unbekannt";
+              const responderName = expense.respondedBy
+                ? teamMembers.find((m) => m.uid === expense.respondedBy)?.displayName || "Unbekannt"
+                : null;
+              const canDelete = expense.createdBy === user?.uid || canManageTasks(role);
+              const expDate = expense.createdAt?.toDate?.();
+
+              const statusColor = expense.status === "pending"
+                ? "bg-orange-100 text-orange-700 border-orange-200"
+                : expense.status === "approved"
+                ? "bg-green-100 text-green-700 border-green-200"
+                : "bg-red-100 text-red-700 border-red-200";
+
+              return (
+                <Card
+                  key={expense.id}
+                  className={`py-3 px-4 ${expense.status === "pending" ? "border-orange-200" : ""}`}
+                >
+                  {/* Header */}
+                  <div
+                    className="flex items-center gap-3 cursor-pointer"
+                    onClick={() => toggleExpenseExpand(expense.id)}
+                  >
+                    <span className={`shrink-0 rounded-full p-1.5 ${statusColor}`}>
+                      <Euro className="h-3.5 w-3.5" />
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900 truncate">{expense.title}</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full ${statusColor}`}>
+                          {EXPENSE_STATUS_LABELS[expense.status]}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        {creatorName} · {expense.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+                        {expDate && ` · ${expDate.toLocaleDateString("de-DE")}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-sm font-semibold text-gray-900">
+                        {expense.amount.toLocaleString("de-DE", { minimumFractionDigits: 2 })} €
+                      </span>
+                      {canDelete && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteExpense(expense.id); }}
+                          className="p-1 hover:text-red-500 text-gray-400 transition-colors"
+                          title="Löschen"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {isExpanded ? (
+                        <ChevronUp className="h-4 w-4 text-gray-400" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-gray-400" />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Expanded */}
+                  {isExpanded && (
+                    <div className="mt-3 pl-9 space-y-3">
+                      {expense.description && (
+                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{expense.description}</p>
+                      )}
+
+                      {expense.receipt && (
+                        <div>
+                          <p className="text-xs font-medium text-gray-500 mb-1">Beleg:</p>
+                          <FileList attachments={[expense.receipt]} />
+                        </div>
+                      )}
+
+                      {/* Antwort anzeigen */}
+                      {expense.status !== "pending" && (
+                        <div className={`rounded-lg p-3 ${
+                          expense.status === "approved" ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"
+                        }`}>
+                          <div className="flex items-center gap-2 mb-1">
+                            {expense.status === "approved" ? (
+                              <CheckCircle className="h-4 w-4 text-green-600" />
+                            ) : (
+                              <AlertTriangle className="h-4 w-4 text-red-600" />
+                            )}
+                            <span className="text-sm font-medium">
+                              {expense.status === "approved" ? "Genehmigt" : "Abgelehnt"} von {responderName}
+                            </span>
+                          </div>
+                          {expense.responseNote && (
+                            <p className="text-sm text-gray-700 ml-6">{expense.responseNote}</p>
+                          )}
+                          {expense.respondedAt && (
+                            <p className="text-xs text-gray-400 ml-6 mt-1">
+                              {expense.respondedAt.toDate().toLocaleDateString("de-DE")} {expense.respondedAt.toDate().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Antwort-Formular */}
+                      {expense.status === "pending" && canManageTasks(role) && (
+                        <>
+                          {respondingExpense === expense.id ? (
+                            <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-3">
+                              <Textarea
+                                id={`expense-response-${expense.id}`}
+                                label="Anmerkung (optional)"
+                                value={expenseResponseNote}
+                                onChange={(e) => setExpenseResponseNote(e.target.value)}
+                                rows={2}
+                                placeholder="Kommentar..."
+                              />
+                              <div className="flex gap-2">
+                                <Button size="sm" onClick={() => respondToExpense(expense.id, "approved")}>
+                                  <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                                  Genehmigen
+                                </Button>
+                                <Button size="sm" variant="danger" onClick={() => respondToExpense(expense.id, "rejected")}>
+                                  <X className="h-3.5 w-3.5 mr-1" />
+                                  Ablehnen
+                                </Button>
+                                <Button size="sm" variant="secondary" onClick={() => { setRespondingExpense(null); setExpenseResponseNote(""); }}>
+                                  Abbrechen
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <Button size="sm" variant="secondary" onClick={() => setRespondingExpense(expense.id)}>
+                              <MessageSquare className="h-3.5 w-3.5 mr-1" />
+                              Antworten
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
