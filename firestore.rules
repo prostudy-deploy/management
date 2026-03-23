@@ -98,6 +98,18 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // Calendar Events
+    match /calendarEvents/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        isManager() || resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid
+      );
+      allow delete: if isAuthenticated() && (
+        isManager() || resource.data.createdBy == request.auth.uid
+      );
+    }
+
     // Expenses (Projektausgaben)
     match /expenses/{expenseId} {
       allow read: if isAuthenticated();

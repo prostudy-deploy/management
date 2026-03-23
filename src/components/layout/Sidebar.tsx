@@ -15,6 +15,7 @@ import {
   Clock,
   FolderOpen,
   MessageCircle,
+  CalendarDays,
   LogOut,
   Menu,
   X,
@@ -23,6 +24,7 @@ import {
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "marketing", "verwaltung"] },
   { name: "Chat", href: "/chat", icon: MessageCircle, roles: ["admin", "marketing", "verwaltung"] },
+  { name: "Kalender", href: "/kalender", icon: CalendarDays, roles: ["admin", "marketing", "verwaltung"] },
   { name: "Projekte", href: "/projekte", icon: FolderOpen, roles: ["admin", "marketing", "verwaltung"] },
   { name: "Aufgaben", href: "/aufgaben", icon: ClipboardList, roles: ["admin", "marketing", "verwaltung"] },
   { name: "Arbeitszeit", href: "/arbeitszeit", icon: Clock, roles: ["admin", "marketing", "verwaltung"] },

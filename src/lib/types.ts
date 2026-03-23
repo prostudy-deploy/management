@@ -287,6 +287,36 @@ export const LINK_TYPE_LABELS: Record<LinkType, string> = {
   other: "Sonstiges",
 };
 
+// --- Kalender ---
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  description: string;
+  date: Timestamp; // Startdatum/-zeit
+  endDate?: Timestamp; // Enddatum/-zeit (optional)
+  allDay: boolean;
+  color: string; // Hex-Farbe
+  assignedTo: string; // UID des Teilnehmers
+  createdBy: string;
+  taskId?: string; // Verknüpfung mit Aufgabe
+  projectId?: string; // Verknüpfung mit Projekt
+  attachments: TaskAttachment[];
+  isDeadline?: boolean; // Automatisch aus Aufgaben-Deadline
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export const CALENDAR_COLORS = [
+  { value: "#3B82F6", label: "Blau" },
+  { value: "#10B981", label: "Grün" },
+  { value: "#F59E0B", label: "Gelb" },
+  { value: "#EF4444", label: "Rot" },
+  { value: "#8B5CF6", label: "Lila" },
+  { value: "#EC4899", label: "Pink" },
+  { value: "#06B6D4", label: "Cyan" },
+  { value: "#F97316", label: "Orange" },
+];
+
 // --- Chat ---
 export interface ChatGroup {
   id: string;

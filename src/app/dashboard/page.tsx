@@ -6,10 +6,10 @@ import { Card, CardTitle, CardContent } from "@/components/ui/Card";
 import { useEffect, useState } from "react";
 import { collection, query, where, getDocs, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase/firebase";
-import { Task, ChatMessage, Expense, Project, ApprovalRequest, canManageTasks, APPROVAL_TYPE_LABELS, EXPENSE_STATUS_LABELS, AppUser } from "@/lib/types";
+import { Task, ChatMessage, Expense, CalendarEvent, Project, ApprovalRequest, canManageTasks, APPROVAL_TYPE_LABELS, EXPENSE_STATUS_LABELS, AppUser } from "@/lib/types";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import Link from "next/link";
-import { ClipboardList, Clock, CheckCircle, AlertCircle, ShieldCheck, MessageSquare, CircleDot, Globe, Paperclip, ShieldQuestion, ArrowRight, Receipt, Euro } from "lucide-react";
+import { ClipboardList, Clock, CheckCircle, AlertCircle, ShieldCheck, MessageSquare, CircleDot, Globe, Paperclip, ShieldQuestion, ArrowRight, Receipt, Euro, CalendarDays } from "lucide-react";
 
 interface PendingApprovalItem {
   taskId: string;
@@ -30,6 +30,8 @@ function DashboardContent() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [recentMessages, setRecentMessages] = useState<ChatMessage[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<(Expense & { projectName?: string })[]>([]);
+  const [todayEvents, setTodayEvents] = useState<CalendarEvent[]>([]);
+  const [todayDeadlines, setTodayDeadlines] = useState<{ title: string; color: string; taskId: string }[]>([]);
   const [teamMembers, setTeamMembers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -56,21 +58,54 @@ function DashboardContent() {
       const usersSnap = await getDocs(query(collection(db, "users"), where("isActive", "==", true)));
       setTeamMembers(usersSnap.docs.map((d) => ({ uid: d.id, ...d.data() } as AppUser)));
 
+      // Projekte laden (für Expense-Namen und Deadline-Farben)
+      const projSnap = await getDocs(collection(db, "projects"));
+      const loadedProjects = projSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Project));
+      const projectNames: Record<string, string> = {};
+      loadedProjects.forEach((p) => { projectNames[p.id] = p.name; });
+
       // Offene Ausgaben laden (nur für Admin/Verwaltung)
       if (canManageTasks(role)) {
         const expSnap = await getDocs(
           query(collection(db, "expenses"), where("status", "==", "pending"), orderBy("createdAt", "desc"))
         );
         const expList = expSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Expense));
-
         if (expList.length > 0) {
-          // Projektnamen laden
-          const projSnap = await getDocs(collection(db, "projects"));
-          const projectNames: Record<string, string> = {};
-          projSnap.docs.forEach((d) => { projectNames[d.id] = (d.data() as any).name; });
           setPendingExpenses(expList.map((e) => ({ ...e, projectName: projectNames[e.projectId] || "Unbekannt" })));
         }
       }
+
+      // Heutige Kalender-Events laden
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      const evSnap = await getDocs(query(collection(db, "calendarEvents"), orderBy("date", "asc")));
+      const allEvts = evSnap.docs.map((d) => ({ id: d.id, ...d.data() } as CalendarEvent));
+      const todayEvts = allEvts.filter((e) => {
+        const eDate = e.date?.toDate?.();
+        if (!eDate) return false;
+        return eDate >= todayStart && eDate <= todayEnd;
+      });
+      // Filter by permission
+      const filteredEvts = canManageTasks(role)
+        ? todayEvts
+        : todayEvts.filter((e) => e.assignedTo === user.uid || e.createdBy === user.uid);
+      setTodayEvents(filteredEvts);
+
+      // Heutige Deadlines aus Tasks
+      const todayDl = loadedTasks
+        .filter((t) => {
+          if (!t.deadline || t.status === "approved") return false;
+          const dl = t.deadline.toDate();
+          return dl >= todayStart && dl <= todayEnd;
+        })
+        .map((t) => {
+          const proj = t.projectId ? loadedProjects.find((p: any) => p.id === t.projectId) : null;
+          return { title: t.title, color: proj?.color || "#EF4444", taskId: t.id };
+        });
+      setTodayDeadlines(todayDl);
 
       setLoading(false);
     }
@@ -151,6 +186,74 @@ function DashboardContent() {
           icon={<AlertCircle className="h-5 w-5 text-red-600" />}
         />
       </div>
+
+      {/* Heutige Termine & Deadlines */}
+      <Card className="mb-6">
+        <CardTitle>
+          <span className="flex items-center justify-between w-full">
+            <span className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4 text-blue-600" />
+              Heute
+              {(todayEvents.length > 0 || todayDeadlines.length > 0) && (
+                <span className="text-xs font-normal text-gray-400">
+                  {todayEvents.length + todayDeadlines.length} Termin{todayEvents.length + todayDeadlines.length !== 1 ? "e" : ""}
+                </span>
+              )}
+            </span>
+            <Link href="/kalender" className="text-xs text-blue-600 hover:underline font-normal">
+              Kalender
+            </Link>
+          </span>
+        </CardTitle>
+        <CardContent>
+          {todayEvents.length === 0 && todayDeadlines.length === 0 ? (
+            <p className="text-sm text-gray-500 py-3 text-center">Heute keine Termine oder Deadlines.</p>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {/* Deadlines */}
+              {todayDeadlines.map((dl) => (
+                <Link
+                  key={dl.taskId}
+                  href={`/aufgaben/${dl.taskId}`}
+                  className="flex items-center gap-3 py-2.5 px-2 hover:bg-gray-50 rounded-lg transition-colors"
+                >
+                  <span className="shrink-0 rounded-full h-2.5 w-2.5 ring-2 ring-red-200" style={{ backgroundColor: dl.color }} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-red-700 truncate">Deadline: {dl.title}</p>
+                  </div>
+                  <span className="text-xs text-red-500 font-medium shrink-0">Fällig heute</span>
+                </Link>
+              ))}
+              {/* Events */}
+              {todayEvents.map((ev) => {
+                const evDate = ev.date?.toDate?.();
+                const evEnd = ev.endDate?.toDate?.();
+                return (
+                  <Link
+                    key={ev.id}
+                    href="/kalender"
+                    className="flex items-center gap-3 py-2.5 px-2 hover:bg-gray-50 rounded-lg transition-colors"
+                  >
+                    <span className="shrink-0 rounded-full h-2.5 w-2.5" style={{ backgroundColor: ev.color }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{ev.title}</p>
+                    </div>
+                    {ev.allDay ? (
+                      <span className="text-xs text-gray-400 shrink-0">Ganztägig</span>
+                    ) : evDate ? (
+                      <span className="text-xs text-gray-500 shrink-0 flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {evDate.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}
+                        {evEnd && ` – ${evEnd.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}`}
+                      </span>
+                    ) : null}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Zwei-Spalten-Layout für Freigaben und Chat */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6">
