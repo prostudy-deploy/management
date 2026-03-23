@@ -306,7 +306,7 @@ export interface CalendarEvent {
   allDay: boolean;
   color: string; // Hex-Farbe
   meetingLink?: string; // Google Meet / Zoom Link
-  assignedTo: string; // UID des Teilnehmers
+  assignedTo: string[]; // UIDs der Teilnehmer
   createdBy: string;
   taskId?: string; // Verknüpfung mit Aufgabe
   projectId?: string; // Verknüpfung mit Projekt

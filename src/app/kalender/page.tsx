@@ -138,7 +138,7 @@ function KalenderContent() {
   const [formColor, setFormColor] = useState("#3B82F6");
   const [formCategory, setFormCategory] = useState<CalendarCategory>("termin");
   const [formMeetingLink, setFormMeetingLink] = useState("");
-  const [formAssignedTo, setFormAssignedTo] = useState("");
+  const [formAssignedTo, setFormAssignedTo] = useState<string[]>([]);
   const [formTaskId, setFormTaskId] = useState("");
   const [formAttachments, setFormAttachments] = useState<TaskAttachment[]>([]);
 
@@ -162,7 +162,10 @@ function KalenderContent() {
       // Filter: Nur eigene Events oder Manager sieht alle
       const filteredEvents = canManageTasks(role)
         ? loadedEvents
-        : loadedEvents.filter((e) => e.assignedTo === user.uid || e.createdBy === user.uid);
+        : loadedEvents.filter((e) => {
+            const assigned = Array.isArray(e.assignedTo) ? e.assignedTo : [e.assignedTo];
+            return assigned.includes(user.uid) || e.createdBy === user.uid;
+          });
       setEvents(filteredEvents);
 
       // Team laden
@@ -198,7 +201,7 @@ function KalenderContent() {
             date: t.deadline!,
             allDay: true,
             color: proj?.color || "#EF4444",
-            assignedTo: t.assignedTo || "",
+            assignedTo: t.assignedTo ? [t.assignedTo] : [],
             createdBy: t.createdBy,
             taskId: t.id,
             projectId: t.projectId || undefined,
@@ -273,7 +276,7 @@ function KalenderContent() {
     setFormColor("#3B82F6");
     setFormCategory("termin");
     setFormMeetingLink("");
-    setFormAssignedTo(user?.uid || "");
+    setFormAssignedTo(user?.uid ? [user.uid] : []);
     setFormTaskId("");
     setFormAttachments([]);
     setEditingEvent(null);
@@ -293,7 +296,7 @@ function KalenderContent() {
     setFormColor(event.color);
     setFormCategory(event.category || "termin");
     setFormMeetingLink(event.meetingLink || "");
-    setFormAssignedTo(event.assignedTo);
+    setFormAssignedTo(Array.isArray(event.assignedTo) ? event.assignedTo : [event.assignedTo]);
     setFormTaskId(event.taskId || "");
     setFormAttachments(event.attachments || []);
     setEditingEvent(event);
@@ -327,7 +330,7 @@ function KalenderContent() {
       allDay: formAllDay,
       color: formCategory === "meeting" ? "#8B5CF6" : formColor,
       meetingLink: formCategory === "meeting" ? formMeetingLink.trim() || null : null,
-      assignedTo: formAssignedTo || user.uid,
+      assignedTo: formAssignedTo.length > 0 ? formAssignedTo : [user.uid],
       taskId: formTaskId || null,
       projectId: formTaskId ? tasks.find((t) => t.id === formTaskId)?.projectId || null : null,
       attachments: formAttachments,
@@ -338,15 +341,23 @@ function KalenderContent() {
     try {
       if (editingEvent) {
         await updateDoc(doc(db, "calendarEvents", editingEvent.id), eventData);
-        setEvents(events.map((e) => e.id === editingEvent.id ? { ...e, ...eventData, id: editingEvent.id } as CalendarEvent : e));
         toast.success("Termin aktualisiert!");
       } else {
         eventData.createdBy = user.uid;
         eventData.createdAt = Timestamp.now();
-        const docRef = await addDoc(collection(db, "calendarEvents"), eventData);
-        setEvents([...events, { id: docRef.id, ...eventData } as CalendarEvent]);
+        await addDoc(collection(db, "calendarEvents"), eventData);
         toast.success("Termin erstellt!");
       }
+      // Neu laden statt lokales State-Update (Timestamps korrekt)
+      const evSnap = await getDocs(query(collection(db, "calendarEvents"), orderBy("date", "asc")));
+      const loadedEvents = evSnap.docs.map((d) => ({ id: d.id, ...d.data() } as CalendarEvent));
+      const filteredEvents = canManageTasks(role)
+        ? loadedEvents
+        : loadedEvents.filter((e) => {
+            const assigned = Array.isArray(e.assignedTo) ? e.assignedTo : [e.assignedTo];
+            return assigned.includes(user.uid) || e.createdBy === user.uid;
+          });
+      setEvents(filteredEvents);
       setShowForm(false);
       setEditingEvent(null);
     } catch (err) {
@@ -394,7 +405,10 @@ function KalenderContent() {
   const renderEventCard = (event: CalendarEvent, compact = false) => {
     const eDate = event.date?.toDate?.();
     const eEnd = event.endDate?.toDate?.();
-    const assigneeName = teamMembers.find((m) => m.uid === event.assignedTo)?.displayName;
+    const assignedArr = Array.isArray(event.assignedTo) ? event.assignedTo : [event.assignedTo];
+    const assigneeNames = assignedArr
+      .map((uid) => teamMembers.find((m) => m.uid === uid)?.displayName)
+      .filter(Boolean);
     const isDeadline = event.isDeadline;
 
     return (
@@ -424,8 +438,8 @@ function KalenderContent() {
                 {event.allDay && (
                   <span className="text-xs text-gray-400">Ganztägig</span>
                 )}
-                {assigneeName && (
-                  <span className="text-xs text-gray-400">{assigneeName}</span>
+                {assigneeNames.length > 0 && (
+                  <span className="text-xs text-gray-400">{assigneeNames.join(", ")}</span>
                 )}
                 {event.meetingLink && !compact && (
                   <a
@@ -675,9 +689,13 @@ function KalenderContent() {
               </div>
 
               {/* Zugewiesen */}
-              {selectedEvent.assignedTo && (
+              {selectedEvent.assignedTo && (Array.isArray(selectedEvent.assignedTo) ? selectedEvent.assignedTo.length > 0 : selectedEvent.assignedTo) && (
                 <p className="text-sm text-gray-500">
-                  Für: <span className="font-medium text-gray-700">{teamMembers.find((m) => m.uid === selectedEvent.assignedTo)?.displayName || "Unbekannt"}</span>
+                  Für: <span className="font-medium text-gray-700">{
+                    (Array.isArray(selectedEvent.assignedTo) ? selectedEvent.assignedTo : [selectedEvent.assignedTo])
+                      .map((uid) => teamMembers.find((m) => m.uid === uid)?.displayName || "Unbekannt")
+                      .join(", ")
+                  }</span>
                 </p>
               )}
 
@@ -862,16 +880,31 @@ function KalenderContent() {
 
               {/* Zugewiesen an */}
               {canAssignOthers ? (
-                <Select
-                  id="formAssignedTo"
-                  label="Zugewiesen an"
-                  value={formAssignedTo}
-                  onChange={(e) => setFormAssignedTo(e.target.value)}
-                  options={teamMembers.map((m) => ({
-                    value: m.uid,
-                    label: `${m.displayName} (${m.role})`,
-                  }))}
-                />
+                <div>
+                  <p className="text-xs font-medium text-gray-700 mb-1.5">Zugewiesen an</p>
+                  <div className="border border-gray-200 rounded-lg p-2 max-h-36 overflow-y-auto space-y-1">
+                    {teamMembers.map((m) => (
+                      <label key={m.uid} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formAssignedTo.includes(m.uid)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setFormAssignedTo([...formAssignedTo, m.uid]);
+                            } else {
+                              setFormAssignedTo(formAssignedTo.filter((id) => id !== m.uid));
+                            }
+                          }}
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm text-gray-700">{m.displayName} <span className="text-gray-400">({m.role})</span></span>
+                      </label>
+                    ))}
+                  </div>
+                  {formAssignedTo.length === 0 && (
+                    <p className="text-xs text-gray-400 mt-1">Mindestens eine Person auswählen</p>
+                  )}
+                </div>
               ) : (
                 <p className="text-xs text-gray-500">Termin für: <span className="font-medium">{teamMembers.find((m) => m.uid === user?.uid)?.displayName || "Dich"}</span></p>
               )}

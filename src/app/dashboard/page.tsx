@@ -91,7 +91,10 @@ function DashboardContent() {
       // Filter by permission
       const filteredEvts = canManageTasks(role)
         ? todayEvts
-        : todayEvts.filter((e) => e.assignedTo === user.uid || e.createdBy === user.uid);
+        : todayEvts.filter((e) => {
+            const assigned = Array.isArray(e.assignedTo) ? e.assignedTo : [e.assignedTo];
+            return assigned.includes(user.uid) || e.createdBy === user.uid;
+          });
       setTodayEvents(filteredEvts);
 
       // Heutige Deadlines aus Tasks
