@@ -82,12 +82,13 @@ export interface ChecklistItem {
 
 // --- Freigaben ---
 export type ApprovalStatus = "pending" | "approved" | "rejected";
-export type ApprovalType = "file" | "question" | "general";
+export type ApprovalType = "file" | "question" | "general" | "link";
 
 export const APPROVAL_TYPE_LABELS: Record<ApprovalType, string> = {
   file: "Datei-Freigabe",
   question: "Frage",
   general: "Allgemeine Freigabe",
+  link: "Link-Freigabe",
 };
 
 export const APPROVAL_STATUS_LABELS: Record<ApprovalStatus, string> = {
@@ -102,6 +103,7 @@ export interface ApprovalRequest {
   title: string;
   description: string;
   attachments: TaskAttachment[];
+  link?: string; // URL für Link-Freigaben
   status: ApprovalStatus;
   createdBy: string;
   createdAt: number; // Date.now()

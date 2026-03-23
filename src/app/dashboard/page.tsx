@@ -4,12 +4,18 @@ import { useAuth } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/layout/AuthGuard";
 import { Card, CardTitle, CardContent } from "@/components/ui/Card";
 import { useEffect, useState } from "react";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase/firebase";
-import { Task, canManageTasks } from "@/lib/types";
+import { Task, ChatMessage, ApprovalRequest, canManageTasks, APPROVAL_TYPE_LABELS, APPROVAL_STATUS_LABELS, AppUser } from "@/lib/types";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import Link from "next/link";
-import { ClipboardList, Clock, CheckCircle, AlertCircle } from "lucide-react";
+import { ClipboardList, Clock, CheckCircle, AlertCircle, ShieldCheck, MessageSquare, CircleDot, Globe, Paperclip, ShieldQuestion, ArrowRight } from "lucide-react";
+
+interface PendingApprovalItem {
+  taskId: string;
+  taskTitle: string;
+  approval: ApprovalRequest;
+}
 
 export default function DashboardPage() {
   return (
@@ -22,12 +28,15 @@ export default function DashboardPage() {
 function DashboardContent() {
   const { user, role } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [recentMessages, setRecentMessages] = useState<ChatMessage[]>([]);
+  const [teamMembers, setTeamMembers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function loadTasks() {
+    async function loadData() {
       if (!user) return;
 
+      // Aufgaben laden
       let q;
       if (canManageTasks(role)) {
         q = query(collection(db, "tasks"));
@@ -40,13 +49,36 @@ function DashboardContent() {
         id: doc.id,
         ...doc.data(),
       })) as Task[];
-
       setTasks(loadedTasks);
+
+      // Team laden
+      const usersSnap = await getDocs(query(collection(db, "users"), where("isActive", "==", true)));
+      setTeamMembers(usersSnap.docs.map((d) => ({ uid: d.id, ...d.data() } as AppUser)));
+
       setLoading(false);
     }
 
-    loadTasks();
+    loadData();
   }, [user, role]);
+
+  // Letzte Chat-Nachrichten (Echtzeit)
+  useEffect(() => {
+    const q = query(
+      collection(db, "chatMessages"),
+      orderBy("createdAt", "desc"),
+      limit(10)
+    );
+
+    const unsub = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as ChatMessage[];
+      setRecentMessages(msgs);
+    });
+
+    return () => unsub();
+  }, []);
 
   const openTasks = tasks.filter((t) => !["approved", "rejected"].includes(t.status));
   const pendingReview = tasks.filter((t) => t.status === "under_review");
@@ -54,6 +86,19 @@ function DashboardContent() {
   const overdueTasks = tasks.filter(
     (t) => t.deadline && t.deadline.toDate() < new Date() && t.status !== "approved"
   );
+
+  // Offene Freigaben sammeln (aus allen Tasks)
+  const pendingApprovals: PendingApprovalItem[] = [];
+  tasks.forEach((task) => {
+    (task.approvals || []).forEach((approval) => {
+      if (approval.status === "pending") {
+        pendingApprovals.push({ taskId: task.id, taskTitle: task.title, approval });
+      }
+    });
+  });
+  // Neueste zuerst, maximal 10
+  pendingApprovals.sort((a, b) => b.approval.createdAt - a.approval.createdAt);
+  const displayApprovals = pendingApprovals.slice(0, 10);
 
   if (loading) {
     return (
@@ -67,7 +112,7 @@ function DashboardContent() {
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Dashboard</h1>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 mb-8">
         <StatCard
           title="Offene Aufgaben"
           value={openTasks.length}
@@ -90,6 +135,120 @@ function DashboardContent() {
         />
       </div>
 
+      {/* Zwei-Spalten-Layout für Freigaben und Chat */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6">
+        {/* Offene Freigaben */}
+        {canManageTasks(role) && (
+          <Card>
+            <CardTitle>
+              <span className="flex items-center justify-between w-full">
+                <span className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-orange-600" />
+                  Offene Freigaben
+                  {pendingApprovals.length > 0 && (
+                    <span className="flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 px-2 py-0.5 text-xs font-medium">
+                      {pendingApprovals.length}
+                    </span>
+                  )}
+                </span>
+              </span>
+            </CardTitle>
+            <CardContent>
+              {displayApprovals.length === 0 ? (
+                <p className="text-sm text-gray-500 py-4 text-center">Keine offenen Freigaben.</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {displayApprovals.map(({ taskId, taskTitle, approval }) => {
+                    const creatorName = teamMembers.find((m) => m.uid === approval.createdBy)?.displayName || "Unbekannt";
+                    const createdDate = new Date(approval.createdAt);
+                    const typeIcon = approval.type === "file"
+                      ? <Paperclip className="h-3.5 w-3.5" />
+                      : approval.type === "question"
+                      ? <ShieldQuestion className="h-3.5 w-3.5" />
+                      : approval.type === "link"
+                      ? <Globe className="h-3.5 w-3.5" />
+                      : <ShieldCheck className="h-3.5 w-3.5" />;
+
+                    return (
+                      <Link
+                        key={approval.id}
+                        href={`/aufgaben/${taskId}`}
+                        className="flex items-start gap-3 py-3 px-2 hover:bg-gray-50 rounded-lg transition-colors"
+                      >
+                        <span className="shrink-0 rounded-full p-1.5 bg-orange-100 text-orange-700 mt-0.5">
+                          {typeIcon}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{approval.title}</p>
+                          <p className="text-xs text-gray-500 truncate">
+                            {taskTitle} · {creatorName}
+                          </p>
+                          <p className="text-xs text-gray-400">
+                            {createdDate.toLocaleDateString("de-DE")} {createdDate.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}
+                            {" · "}{APPROVAL_TYPE_LABELS[approval.type]}
+                          </p>
+                        </div>
+                        <ArrowRight className="h-4 w-4 text-gray-400 shrink-0 mt-1" />
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Letzte Chat-Nachrichten */}
+        <Card>
+          <CardTitle>
+            <span className="flex items-center justify-between w-full">
+              <span className="flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-blue-600" />
+                Letzte Nachrichten
+              </span>
+              <Link href="/chat" className="text-xs text-blue-600 hover:underline font-normal">
+                Alle anzeigen
+              </Link>
+            </span>
+          </CardTitle>
+          <CardContent>
+            {recentMessages.length === 0 ? (
+              <p className="text-sm text-gray-500 py-4 text-center">Keine Nachrichten.</p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {recentMessages.map((msg) => {
+                  const msgDate = msg.createdAt?.toDate?.();
+                  return (
+                    <Link
+                      key={msg.id}
+                      href={`/chat?group=${msg.groupId}`}
+                      className="flex items-start gap-3 py-3 px-2 hover:bg-gray-50 rounded-lg transition-colors"
+                    >
+                      <div className="shrink-0 h-8 w-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold mt-0.5">
+                        {msg.displayName?.charAt(0)?.toUpperCase() || "?"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium text-gray-900">{msg.displayName}</p>
+                          {msgDate && (
+                            <p className="text-xs text-gray-400">
+                              {msgDate.toLocaleDateString("de-DE")} {msgDate.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-600 truncate">
+                          {msg.content || (msg.attachments?.length ? `📎 ${msg.attachments.length} Datei(en)` : "")}
+                        </p>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       <Card>
         <CardTitle>Aktuelle Aufgaben</CardTitle>
         <CardContent>
@@ -97,23 +256,34 @@ function DashboardContent() {
             <p className="text-sm text-gray-500 py-4">Keine offenen Aufgaben.</p>
           ) : (
             <div className="divide-y divide-gray-100">
-              {openTasks.slice(0, 10).map((task) => (
-                <Link
-                  key={task.id}
-                  href={`/aufgaben/${task.id}`}
-                  className="flex items-center justify-between py-3 hover:bg-gray-50 px-2 rounded-lg transition-colors"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{task.title}</p>
-                    <p className="text-xs text-gray-500">
-                      {task.deadline
-                        ? `Fällig: ${task.deadline.toDate().toLocaleDateString("de-DE")}`
-                        : "Kein Deadline"}
-                    </p>
-                  </div>
-                  <TaskStatusBadge status={task.status} />
-                </Link>
-              ))}
+              {openTasks.slice(0, 10).map((task) => {
+                const taskPendingApprovals = (task.approvals || []).filter((a) => a.status === "pending").length;
+                return (
+                  <Link
+                    key={task.id}
+                    href={`/aufgaben/${task.id}`}
+                    className="flex items-center justify-between py-3 hover:bg-gray-50 px-2 rounded-lg transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{task.title}</p>
+                        <p className="text-xs text-gray-500">
+                          {task.deadline
+                            ? `Fällig: ${task.deadline.toDate().toLocaleDateString("de-DE")}`
+                            : "Kein Deadline"}
+                        </p>
+                      </div>
+                      {taskPendingApprovals > 0 && (
+                        <span className="flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 px-1.5 py-0.5 text-xs font-medium">
+                          <CircleDot className="h-3 w-3" />
+                          {taskPendingApprovals}
+                        </span>
+                      )}
+                    </div>
+                    <TaskStatusBadge status={task.status} />
+                  </Link>
+                );
+              })}
             </div>
           )}
         </CardContent>

@@ -3,6 +3,7 @@
 import { useAuth } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/layout/AuthGuard";
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   collection,
   addDoc,
@@ -161,6 +162,7 @@ function renderMessageContent(content: string, mentions: ChatMention[]) {
 // --- Hauptkomponente ---
 function ChatContent() {
   const { user, role, displayName } = useAuth();
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -171,7 +173,7 @@ function ChatContent() {
 
   // Gruppen
   const [groups, setGroups] = useState<ChatGroup[]>([]);
-  const [activeGroupId, setActiveGroupId] = useState<string>("allgemein");
+  const [activeGroupId, setActiveGroupId] = useState<string>(searchParams.get("group") || "allgemein");
   const [showGroupSidebar, setShowGroupSidebar] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");

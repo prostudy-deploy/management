@@ -17,7 +17,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { FileList, FileUpload } from "@/components/ui/FileUpload";
-import { ArrowLeft, ExternalLink, Video, Palette, FileText, Link2, Star, AlertTriangle, CheckCircle, Paperclip, Pencil, X, Save, Clock, Plus, Square, CheckSquare, Trash2, Upload, ShieldCheck, ShieldQuestion, MessageSquare, Send, ChevronDown, ChevronUp, CircleDot } from "lucide-react";
+import { ArrowLeft, ExternalLink, Video, Palette, FileText, Link2, Star, AlertTriangle, CheckCircle, Paperclip, Pencil, X, Save, Clock, Plus, Square, CheckSquare, Trash2, Upload, ShieldCheck, ShieldQuestion, MessageSquare, Send, ChevronDown, ChevronUp, CircleDot, Globe } from "lucide-react";
 
 const linkIcons: Record<string, React.ReactNode> = {
   meeting: <Video className="h-4 w-4" />,
@@ -66,6 +66,7 @@ function AufgabeDetailContent() {
   const [approvalAttachments, setApprovalAttachments] = useState<TaskAttachment[]>([]);
   const [respondingTo, setRespondingTo] = useState<string | null>(null);
   const [responseNote, setResponseNote] = useState("");
+  const [approvalLink, setApprovalLink] = useState("");
   const [expandedApprovals, setExpandedApprovals] = useState<Set<string>>(new Set());
 
   // (File Upload wird direkt über task.attachments gehandhabt)
@@ -230,6 +231,7 @@ function AufgabeDetailContent() {
       title: approvalTitle.trim(),
       description: approvalDescription.trim(),
       attachments: approvalAttachments,
+      link: approvalLink.trim() || undefined,
       status: "pending",
       createdBy: user.uid,
       createdAt: Date.now(),
@@ -242,6 +244,7 @@ function AufgabeDetailContent() {
       setApprovalTitle("");
       setApprovalDescription("");
       setApprovalAttachments([]);
+      setApprovalLink("");
       setShowApprovalForm(false);
       toast.success("Freigabe-Anfrage gesendet!");
     } catch (err) {
@@ -267,6 +270,24 @@ function AufgabeDetailContent() {
     } catch (err) {
       console.error(err);
       toast.error("Fehler.");
+    }
+  };
+
+  const deleteApproval = async (approvalId: string) => {
+    if (!task || !user) return;
+    const approval = (task.approvals || []).find((a) => a.id === approvalId);
+    if (!approval) return;
+    // Nur Ersteller oder Admin/Verwaltung dürfen löschen
+    if (approval.createdBy !== user.uid && !canManageTasks(role)) return;
+    const updatedApprovals = (task.approvals || []).filter((a) => a.id !== approvalId);
+    const now = Timestamp.now();
+    try {
+      await updateDoc(doc(db, "tasks", taskId), { approvals: updatedApprovals, updatedAt: now });
+      setTask({ ...task, approvals: updatedApprovals, updatedAt: now });
+      toast.success("Freigabe-Anfrage gelöscht.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Fehler beim Löschen.");
     }
   };
 
@@ -511,6 +532,7 @@ function AufgabeDetailContent() {
                         options={[
                           { value: "general", label: "Allgemeine Freigabe" },
                           { value: "file", label: "Datei-Freigabe" },
+                          { value: "link", label: "Link-Freigabe" },
                           { value: "question", label: "Frage" },
                         ]}
                       />
@@ -540,12 +562,22 @@ function AufgabeDetailContent() {
                         />
                       </div>
                     )}
+                    {(approvalType === "link" || approvalType === "general") && (
+                      <Input
+                        id="approvalLink"
+                        label="Link (optional)"
+                        type="url"
+                        value={approvalLink}
+                        onChange={(e) => setApprovalLink(e.target.value)}
+                        placeholder="https://..."
+                      />
+                    )}
                     <div className="flex gap-2">
                       <Button size="sm" onClick={submitApproval} disabled={!approvalTitle.trim()}>
                         <Send className="h-3.5 w-3.5 mr-1" />
                         Senden
                       </Button>
-                      <Button size="sm" variant="secondary" onClick={() => { setShowApprovalForm(false); setApprovalTitle(""); setApprovalDescription(""); setApprovalAttachments([]); }}>
+                      <Button size="sm" variant="secondary" onClick={() => { setShowApprovalForm(false); setApprovalTitle(""); setApprovalDescription(""); setApprovalAttachments([]); setApprovalLink(""); }}>
                         Abbrechen
                       </Button>
                     </div>
@@ -569,7 +601,11 @@ function AufgabeDetailContent() {
                         ? <Paperclip className="h-3.5 w-3.5" />
                         : approval.type === "question"
                         ? <ShieldQuestion className="h-3.5 w-3.5" />
+                        : approval.type === "link"
+                        ? <Globe className="h-3.5 w-3.5" />
                         : <ShieldCheck className="h-3.5 w-3.5" />;
+
+                      const canDeleteApproval = approval.createdBy === user?.uid || canManageTasks(role);
 
                       const statusColor = approval.status === "pending"
                         ? "bg-orange-100 text-orange-700 border-orange-200"
@@ -604,18 +640,51 @@ function AufgabeDetailContent() {
                                 {" · "}{APPROVAL_TYPE_LABELS[approval.type]}
                               </p>
                             </div>
-                            {isExpanded ? (
-                              <ChevronUp className="h-4 w-4 text-gray-400 shrink-0" />
-                            ) : (
-                              <ChevronDown className="h-4 w-4 text-gray-400 shrink-0" />
-                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {canDeleteApproval && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); deleteApproval(approval.id); }}
+                                  className="p-1 hover:text-red-500 text-gray-400 transition-colors"
+                                  title="Löschen"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                              {isExpanded ? (
+                                <ChevronUp className="h-4 w-4 text-gray-400" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 text-gray-400" />
+                              )}
+                            </div>
                           </div>
 
                           {/* Expanded Content */}
                           {isExpanded && (
                             <div className="mt-3 pl-8 space-y-3">
                               {approval.description && (
-                                <p className="text-sm text-gray-700 whitespace-pre-wrap">{approval.description}</p>
+                                <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                                  {approval.description.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+                                    /^https?:\/\//.test(part) ? (
+                                      <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all">{part}</a>
+                                    ) : (
+                                      <span key={i}>{part}</span>
+                                    )
+                                  )}
+                                </p>
+                              )}
+
+                              {/* Link anzeigen */}
+                              {approval.link && (
+                                <a
+                                  href={approval.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 hover:underline break-all"
+                                >
+                                  <Globe className="h-3.5 w-3.5 shrink-0" />
+                                  {approval.link}
+                                  <ExternalLink className="h-3 w-3 shrink-0" />
+                                </a>
                               )}
 
                               {/* Angehängte Dateien */}
