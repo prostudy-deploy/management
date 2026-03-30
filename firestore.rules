@@ -34,13 +34,9 @@ service cloud.firestore {
 
     // Tasks Collection
     match /tasks/{taskId} {
-      allow read: if isAuthenticated() && (
-        isManager() || resource.data.assignedTo == request.auth.uid
-      );
+      allow read: if isAuthenticated();
       allow create: if isManager();
-      allow update: if isAuthenticated() && (
-        isManager() || resource.data.assignedTo == request.auth.uid
-      );
+      allow update: if isAuthenticated();
       allow delete: if isManager();
     }
 
