@@ -204,7 +204,7 @@ function KalenderContent() {
             assignedTo: t.assignedTo ? [t.assignedTo] : [],
             createdBy: t.createdBy,
             taskId: t.id,
-            projectId: t.projectId || undefined,
+            projectId: t.projectId || null,
             attachments: [],
             isDeadline: true,
             createdAt: t.createdAt,

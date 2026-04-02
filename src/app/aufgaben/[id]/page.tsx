@@ -231,7 +231,7 @@ function AufgabeDetailContent() {
       title: approvalTitle.trim(),
       description: approvalDescription.trim(),
       attachments: approvalAttachments,
-      link: approvalLink.trim() || undefined,
+      ...(approvalLink.trim() ? { link: approvalLink.trim() } : {}),
       status: "pending",
       createdBy: user.uid,
       createdAt: Date.now(),
@@ -257,7 +257,7 @@ function AufgabeDetailContent() {
     if (!task || !user) return;
     const updatedApprovals = (task.approvals || []).map((a) =>
       a.id === approvalId
-        ? { ...a, status: decision as ApprovalStatus, respondedBy: user.uid, respondedAt: Date.now(), responseNote: responseNote.trim() || undefined }
+        ? { ...a, status: decision as ApprovalStatus, respondedBy: user.uid, respondedAt: Date.now(), ...(responseNote.trim() ? { responseNote: responseNote.trim() } : {}) }
         : a
     );
     const now = Timestamp.now();

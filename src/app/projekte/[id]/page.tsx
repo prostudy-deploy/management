@@ -184,7 +184,7 @@ function ProjektDetailContent() {
       });
       setExpenses(expenses.map((e) =>
         e.id === expenseId
-          ? { ...e, status: decision as ExpenseStatus, respondedBy: user.uid, respondedAt: Timestamp.now(), responseNote: expenseResponseNote.trim() || undefined }
+          ? { ...e, status: decision as ExpenseStatus, respondedBy: user.uid, respondedAt: Timestamp.now(), ...(expenseResponseNote.trim() ? { responseNote: expenseResponseNote.trim() } : {}) }
           : e
       ));
       setRespondingExpense(null);
