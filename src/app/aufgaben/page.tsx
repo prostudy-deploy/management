@@ -33,34 +33,42 @@ function AufgabenContent() {
     async function loadTasks() {
       if (!user) return;
 
-      let q;
-      if (canManageTasks(role)) {
-        q = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
-      } else {
-        q = query(
-          collection(db, "tasks"),
-          where("assignedTo", "==", user.uid),
-          orderBy("createdAt", "desc")
-        );
+      try {
+        let q;
+        if (canManageTasks(role)) {
+          q = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
+        } else {
+          // Kein orderBy hier → kein Composite Index nötig; Sortierung im JS
+          q = query(
+            collection(db, "tasks"),
+            where("assignedTo", "==", user.uid)
+          );
+        }
+
+        const snapshot = await getDocs(q);
+        const loadedTasks = (snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as Task[]).sort((a, b) => {
+          const aTime = a.createdAt?.toMillis?.() ?? 0;
+          const bTime = b.createdAt?.toMillis?.() ?? 0;
+          return bTime - aTime;
+        });
+
+        setTasks(loadedTasks);
+
+        // Projekte laden
+        const projSnap = await getDocs(collection(db, "projects"));
+        const projMap: Record<string, Project> = {};
+        projSnap.docs.forEach((d) => {
+          projMap[d.id] = { id: d.id, ...d.data() } as Project;
+        });
+        setProjects(projMap);
+      } catch (err) {
+        console.error("Fehler beim Laden der Aufgaben:", err);
+      } finally {
+        setLoading(false);
       }
-
-      const snapshot = await getDocs(q);
-      const loadedTasks = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Task[];
-
-      setTasks(loadedTasks);
-
-      // Projekte laden
-      const projSnap = await getDocs(collection(db, "projects"));
-      const projMap: Record<string, Project> = {};
-      projSnap.docs.forEach((d) => {
-        projMap[d.id] = { id: d.id, ...d.data() } as Project;
-      });
-      setProjects(projMap);
-
-      setLoading(false);
     }
 
     loadTasks();
